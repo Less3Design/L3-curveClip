@@ -369,6 +369,8 @@ namespace Less3.CurveClips.Editor
         private const float SelectionHandleSize = 8f;
         private const float ActiveTimeMin = 0f;
         private const float ActiveTimeMax = 1f;
+        private const float SingleKeyOverlayWidth = 120f;
+        private const float SingleKeyOverlayHeight = 44f;
 
         private readonly string title;
         private readonly SerializedObject serializedObject;
@@ -378,6 +380,11 @@ namespace Less3.CurveClips.Editor
         private readonly HashSet<string> selection = new HashSet<string>();
         private readonly List<KeyDragState> keyDragStates = new List<KeyDragState>();
         private readonly List<KeyDragCurveState> keyDragCurveStates = new List<KeyDragCurveState>();
+        private readonly Label highValueLabel;
+        private readonly Label lowValueLabel;
+        private readonly VisualElement singleKeyOverlay;
+        private readonly FloatField singleKeyTimeField;
+        private readonly FloatField singleKeyValueField;
 
         private Rect view;
         private Rect graphRect;
@@ -392,6 +399,7 @@ namespace Less3.CurveClips.Editor
         private InteractionMode interactionMode;
         private TangentDragState tangentDragState;
         private bool additiveSelection;
+        private bool updatingSingleKeyOverlay;
 
         public CurveClipGraphElement(
             string title,
@@ -437,17 +445,33 @@ namespace Less3.CurveClips.Editor
             fitButton.style.height = 20;
             Add(fitButton);
 
+            highValueLabel = CreateValueGuideLabel();
+            lowValueLabel = CreateValueGuideLabel();
+            Add(highValueLabel);
+            Add(lowValueLabel);
+
+            singleKeyTimeField = CreateSingleKeyField("time");
+            singleKeyValueField = CreateSingleKeyField("value");
+            singleKeyOverlay = CreateSingleKeyOverlay(singleKeyTimeField, singleKeyValueField);
+            Add(singleKeyOverlay);
+
+            singleKeyTimeField.RegisterValueChangedCallback(evt => ApplySingleKeyOverlayEdit(true, evt.newValue));
+            singleKeyValueField.RegisterValueChangedCallback(evt => ApplySingleKeyOverlayEdit(false, evt.newValue));
+
             generateVisualContent += GenerateVisualContent;
             RegisterCallback<PointerDownEvent>(OnPointerDown);
             RegisterCallback<PointerMoveEvent>(OnPointerMove);
             RegisterCallback<PointerUpEvent>(OnPointerUp);
             RegisterCallback<WheelEvent>(OnWheel);
             RegisterCallback<KeyDownEvent>(OnKeyDown);
+            RegisterCallback<GeometryChangedEvent>(_ => UpdateGraphOverlays());
             this.AddManipulator(new ContextualMenuManipulator(BuildContextMenu));
         }
 
         public void Refresh()
         {
+            UpdateGraphRect();
+            UpdateGraphOverlays();
             MarkDirtyRepaint();
         }
 
@@ -459,6 +483,7 @@ namespace Less3.CurveClips.Editor
             Painter2D painter = ctx.painter2D;
             DrawBackground(painter);
             DrawGrid(painter);
+            DrawValueExtentGuides(painter);
             DrawCurves(painter);
             DrawSelection(painter);
             DrawHeader(painter);
@@ -508,6 +533,63 @@ namespace Less3.CurveClips.Editor
             // Painter2D has no text API; use a compact title tab shape as the visual anchor.
             Color tab = EditorGUIUtility.isProSkin ? new Color(0.28f, 0.28f, 0.28f) : new Color(0.52f, 0.52f, 0.52f);
             FillRect(painter, new Rect(rect.xMin + 6f, rect.yMin + 6f, Mathf.Clamp(title.Length * 7f + 18f, 58f, 110f), 12f), tab);
+        }
+
+        private Label CreateValueGuideLabel()
+        {
+            var label = new Label();
+            label.pickingMode = PickingMode.Ignore;
+            label.style.position = Position.Absolute;
+            label.style.width = 66;
+            label.style.height = 16;
+            label.style.unityTextAlign = TextAnchor.MiddleCenter;
+            label.style.fontSize = 10;
+            label.style.color = Color.white;
+            label.style.backgroundColor = Color.clear;
+            label.style.display = DisplayStyle.None;
+            return label;
+        }
+
+        private VisualElement CreateSingleKeyOverlay(FloatField timeField, FloatField valueField)
+        {
+            var overlay = new VisualElement();
+            overlay.style.position = Position.Absolute;
+            overlay.style.width = SingleKeyOverlayWidth;
+            overlay.style.height = SingleKeyOverlayHeight;
+            overlay.style.paddingLeft = 5;
+            overlay.style.paddingRight = 5;
+            overlay.style.paddingTop = 4;
+            overlay.style.paddingBottom = 4;
+            overlay.style.borderBottomLeftRadius = 3;
+            overlay.style.borderBottomRightRadius = 3;
+            overlay.style.borderTopLeftRadius = 3;
+            overlay.style.borderTopRightRadius = 3;
+            overlay.style.backgroundColor = new Color(0.04f, 0.04f, 0.04f, 0.84f);
+            overlay.style.display = DisplayStyle.None;
+
+            overlay.Add(timeField);
+            overlay.Add(valueField);
+            overlay.RegisterCallback<PointerDownEvent>(evt => evt.StopPropagation());
+            overlay.RegisterCallback<PointerMoveEvent>(evt => evt.StopPropagation());
+            overlay.RegisterCallback<PointerUpEvent>(evt => evt.StopPropagation());
+            overlay.RegisterCallback<WheelEvent>(evt => evt.StopPropagation());
+            overlay.RegisterCallback<KeyDownEvent>(evt => evt.StopPropagation());
+            return overlay;
+        }
+
+        private FloatField CreateSingleKeyField(string label)
+        {
+            var field = new FloatField(label);
+            field.style.height = 18;
+            field.style.marginLeft = 0;
+            field.style.marginRight = 0;
+            field.style.marginTop = 0;
+            field.style.marginBottom = 2;
+            field.style.color = Color.white;
+            field.labelElement.style.minWidth = 38;
+            field.labelElement.style.width = 38;
+            field.labelElement.style.color = Color.white;
+            return field;
         }
 
         private void DrawGrid(Painter2D painter)
@@ -603,6 +685,185 @@ namespace Less3.CurveClips.Editor
                 return default;
 
             return Rect.MinMaxRect(xMin, graphRect.yMin, xMax, graphRect.yMax);
+        }
+
+        private void DrawValueExtentGuides(Painter2D painter)
+        {
+            Rect activeRect = GetActiveTimeScreenRect();
+            if (activeRect.width <= 0f || !TryGetActiveKeyValueExtents(out float minValue, out float maxValue))
+                return;
+
+            Color color = EditorGUIUtility.isProSkin ? new Color(1f, 1f, 1f, 0.12f) : new Color(0f, 0f, 0f, 0.16f);
+            DrawValueGuide(painter, activeRect, maxValue, color);
+
+            if (Mathf.Abs(maxValue - minValue) > 0.0001f)
+                DrawValueGuide(painter, activeRect, minValue, color);
+        }
+
+        private void DrawValueGuide(Painter2D painter, Rect activeRect, float value, Color color)
+        {
+            if (value < view.yMin || value > view.yMax)
+                return;
+
+            float y = ValueToY(value);
+            DrawDashedLine(painter, new Vector2(activeRect.xMin, y), new Vector2(activeRect.xMax, y), color, 1f);
+        }
+
+        private void UpdateValueGuideLabels()
+        {
+            HideValueGuideLabels();
+
+            Rect activeRect = GetActiveTimeScreenRect();
+            if (activeRect.width <= 0f || !TryGetActiveKeyValueExtents(out float minValue, out float maxValue))
+                return;
+
+            PositionValueGuideLabel(highValueLabel, activeRect.center.x, ValueToY(maxValue), maxValue);
+
+            if (Mathf.Abs(maxValue - minValue) > 0.0001f)
+                PositionValueGuideLabel(lowValueLabel, activeRect.center.x, ValueToY(minValue), minValue);
+        }
+
+        private void UpdateGraphOverlays()
+        {
+            UpdateValueGuideLabels();
+            UpdateSingleKeyOverlay();
+        }
+
+        private void UpdateSingleKeyOverlay()
+        {
+            if (!TryGetSingleSelectedKey(out _, out _, out Keyframe key))
+            {
+                singleKeyOverlay.style.display = DisplayStyle.None;
+                return;
+            }
+
+            Vector2 point = GraphToScreen(key.time, key.value);
+            if (!graphRect.Contains(point))
+            {
+                singleKeyOverlay.style.display = DisplayStyle.None;
+                return;
+            }
+
+            updatingSingleKeyOverlay = true;
+            singleKeyTimeField.SetValueWithoutNotify(key.time);
+            singleKeyValueField.SetValueWithoutNotify(key.value);
+            updatingSingleKeyOverlay = false;
+
+            singleKeyOverlay.style.left = Mathf.Clamp(point.x + 10f, graphRect.xMin, Mathf.Max(graphRect.xMin, graphRect.xMax - SingleKeyOverlayWidth));
+            singleKeyOverlay.style.top = Mathf.Clamp(point.y - SingleKeyOverlayHeight - 8f, graphRect.yMin, Mathf.Max(graphRect.yMin, graphRect.yMax - SingleKeyOverlayHeight));
+            singleKeyOverlay.style.display = DisplayStyle.Flex;
+        }
+
+        private void ApplySingleKeyOverlayEdit(bool editTime, float value)
+        {
+            if (updatingSingleKeyOverlay)
+                return;
+
+            if (!TryGetSingleSelectedKey(out string path, out int index, out Keyframe key))
+                return;
+
+            SerializedProperty property = serializedObject.FindProperty(path);
+            if (property == null)
+                return;
+
+            AnimationCurve curve = property.animationCurveValue;
+            if (index < 0 || index >= curve.length)
+                return;
+
+            if (editTime)
+                key.time = Mathf.Clamp(value, 0f, GetDuration());
+            else
+                key.value = value;
+
+            int newIndex = curve.MoveKey(index, key);
+            if (newIndex < 0)
+                newIndex = index;
+            property.animationCurveValue = curve;
+
+            selection.Clear();
+            selection.Add(KeyId(path, newIndex));
+            ApplyCurveChange();
+            UpdateGraphOverlays();
+            MarkDirtyRepaint();
+        }
+
+        private bool TryGetSingleSelectedKey(out string path, out int index, out Keyframe key)
+        {
+            path = null;
+            index = -1;
+            key = default;
+
+            if (selection.Count != 1)
+                return false;
+
+            foreach (string id in selection)
+            {
+                if (!TryParseKeyId(id, out path, out index))
+                    return false;
+
+                SerializedProperty property = serializedObject.FindProperty(path);
+                if (property == null)
+                    return false;
+
+                AnimationCurve curve = property.animationCurveValue;
+                if (index < 0 || index >= curve.length)
+                    return false;
+
+                key = curve.keys[index];
+                return true;
+            }
+
+            return false;
+        }
+
+        private void PositionValueGuideLabel(Label label, float x, float y, float value)
+        {
+            if (y < graphRect.yMin || y > graphRect.yMax)
+                return;
+
+            const float width = 66f;
+            const float height = 16f;
+            label.text = FormatValue(value);
+            label.style.left = Mathf.Clamp(x - width * 0.5f, graphRect.xMin, Mathf.Max(graphRect.xMin, graphRect.xMax - width));
+            label.style.top = Mathf.Clamp(y - height * 0.5f, graphRect.yMin, Mathf.Max(graphRect.yMin, graphRect.yMax - height));
+            label.style.display = DisplayStyle.Flex;
+        }
+
+        private void HideValueGuideLabels()
+        {
+            highValueLabel.style.display = DisplayStyle.None;
+            lowValueLabel.style.display = DisplayStyle.None;
+        }
+
+        private bool TryGetActiveKeyValueExtents(out float minValue, out float maxValue)
+        {
+            minValue = float.PositiveInfinity;
+            maxValue = float.NegativeInfinity;
+
+            IReadOnlyList<CurveChannel> channels = getChannels();
+            for (int c = 0; c < channels.Count; c++)
+            {
+                SerializedProperty property = serializedObject.FindProperty(channels[c].CurvePath);
+                if (property == null)
+                    continue;
+
+                Keyframe[] keys = property.animationCurveValue.keys;
+                for (int i = 0; i < keys.Length; i++)
+                {
+                    if (keys[i].time < ActiveTimeMin || keys[i].time > ActiveTimeMax)
+                        continue;
+
+                    minValue = Mathf.Min(minValue, keys[i].value);
+                    maxValue = Mathf.Max(maxValue, keys[i].value);
+                }
+            }
+
+            return !float.IsInfinity(minValue);
+        }
+
+        private static string FormatValue(float value)
+        {
+            return value.ToString("0.###");
         }
 
         private void DrawCurves(Painter2D painter)
@@ -781,6 +1042,7 @@ namespace Less3.CurveClips.Editor
                 else if (evt.actionKey)
                 {
                     selection.Remove(id);
+                    UpdateGraphOverlays();
                     MarkDirtyRepaint();
                     return;
                 }
@@ -788,6 +1050,7 @@ namespace Less3.CurveClips.Editor
                 BeginKeyDrag(evt.localPosition);
                 interactionMode = InteractionMode.DragKeys;
                 this.CapturePointer(evt.pointerId);
+                UpdateGraphOverlays();
                 evt.StopPropagation();
                 return;
             }
@@ -855,6 +1118,7 @@ namespace Less3.CurveClips.Editor
             else if (interactionMode == InteractionMode.ScaleSelection)
                 UpdateScale(evt.localPosition);
 
+            UpdateGraphOverlays();
             MarkDirtyRepaint();
             evt.StopPropagation();
         }
@@ -876,6 +1140,7 @@ namespace Less3.CurveClips.Editor
             if (completedMode == InteractionMode.PendingMarquee && !additiveSelection)
                 selection.Clear();
 
+            UpdateGraphOverlays();
             MarkDirtyRepaint();
             evt.StopPropagation();
         }
@@ -894,6 +1159,7 @@ namespace Less3.CurveClips.Editor
             float yMax = graphPoint.y + (view.yMax - graphPoint.y) * zoom;
 
             SetView(xMin, xMax, yMin, yMax);
+            UpdateGraphOverlays();
             MarkDirtyRepaint();
             evt.StopPropagation();
         }
@@ -922,6 +1188,7 @@ namespace Less3.CurveClips.Editor
             {
                 view = defaultView;
                 view.width = Mathf.Max(GetDuration(), defaultView.width);
+                UpdateGraphOverlays();
                 MarkDirtyRepaint();
             });
             evt.menu.AppendSeparator();
@@ -1300,6 +1567,7 @@ namespace Less3.CurveClips.Editor
             selection.Clear();
             selection.Add(KeyId(targetPath, Mathf.Max(0, index)));
             BeginKeyDrag(screenPosition);
+            UpdateGraphOverlays();
             MarkDirtyRepaint();
         }
 
@@ -1343,6 +1611,7 @@ namespace Less3.CurveClips.Editor
 
             selection.Clear();
             ApplyCurveChange();
+            UpdateGraphOverlays();
             MarkDirtyRepaint();
         }
 
@@ -1476,6 +1745,7 @@ namespace Less3.CurveClips.Editor
             {
                 view = defaultView;
                 view.width = Mathf.Max(duration, defaultView.width);
+                UpdateGraphOverlays();
                 MarkDirtyRepaint();
                 return;
             }
@@ -1493,6 +1763,7 @@ namespace Less3.CurveClips.Editor
                 Mathf.Max(duration, maxTime + timePadding),
                 minValue - valuePadding,
                 maxValue + valuePadding);
+            UpdateGraphOverlays();
             MarkDirtyRepaint();
         }
 
