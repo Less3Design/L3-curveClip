@@ -12,20 +12,31 @@ namespace Less3.CurveClips.Editor
     {
         private const string CombinedGraphEditorPrefKey = "Less3.CurveClips.Editor.ShowCombinedGraph";
         private const string PreviewLoopDelayEditorPrefKey = "Less3.CurveClips.Editor.PreviewLoopDelay";
-        private const float GraphSectionInspectorBleed = 6f;
+        private const float GraphSectionHorizontalScrollbarGuard = 36f;
+        private const float GraphSectionVerticalScrollbarGuard = 20f;
+        private const float GraphToolbarFallbackHeight = 22f;
+        private const float MinSeparateGraphHeight = 100f;
+        private const float MinCombinedGraphHeight = 200f;
         private const float PreviewLoopDelayControlWidth = 112f;
         private const float PreviewLoopDelayControlHeight = 22f;
 
+        private VisualElement inspectorRoot;
         private VisualElement curveList;
+        private VisualElement graphSection;
+        private VisualElement graphToolbar;
         private CurveClipGraphElement positionGraph;
         private CurveClipGraphElement rotationGraph;
         private CurveClipGraphElement scaleGraph;
         private CurveClipGraphElement customGraph;
         private CurveClipGraphElement combinedGraph;
         private VisualElement separateGraphsContainer;
+        private VisualElement separateGraphsTopRow;
+        private VisualElement separateGraphsBottomRow;
         private VisualElement combinedGraphContainer;
         private ToolbarToggle separateModeToggle;
         private ToolbarToggle combinedModeToggle;
+        private ScrollView inspectorScrollView;
+        private VisualElement inspectorViewport;
         private PreviewRenderUtility previewUtility;
         private Mesh previewCubeMesh;
         private Material previewCubeMaterial;
@@ -37,6 +48,9 @@ namespace Less3.CurveClips.Editor
         private float previewOrbitPitch = -22f;
         private float previewLoopDelay;
         private bool showCombinedGraph;
+        private bool graphFitScheduled;
+        private bool fittingGraphSection;
+        private bool graphSectionSized;
 
         private void OnEnable()
         {
@@ -56,12 +70,18 @@ namespace Less3.CurveClips.Editor
             serializedObject.Update();
             RebuildCurveList();
             RepaintGraphs();
+            ScheduleGraphSectionFit();
             Repaint();
         }
 
         public override VisualElement CreateInspectorGUI()
         {
             var root = new VisualElement();
+            inspectorRoot = root;
+            root.style.flexGrow = 1;
+            root.RegisterCallback<AttachToPanelEvent>(OnInspectorRootAttached);
+            root.RegisterCallback<DetachFromPanelEvent>(OnInspectorRootDetached);
+            root.RegisterCallback<GeometryChangedEvent>(OnGraphSizingGeometryChanged);
 
             if (serializedObject.isEditingMultipleObjects)
             {
@@ -78,8 +98,10 @@ namespace Less3.CurveClips.Editor
             customCurves.style.marginLeft = 2;
             customCurves.style.marginRight = 2;
             root.Add(customCurves);
-            root.Add(BuildGraphSection());
+            graphSection = BuildGraphSection();
+            root.Add(graphSection);
             root.Bind(serializedObject);
+            ScheduleGraphSectionFit();
             return root;
         }
 
@@ -411,6 +433,204 @@ namespace Less3.CurveClips.Editor
             return new PropertyField(serializedObject.FindProperty(propertyName));
         }
 
+        private void OnInspectorRootAttached(AttachToPanelEvent evt)
+        {
+            inspectorScrollView = inspectorRoot?.GetFirstAncestorOfType<ScrollView>();
+            inspectorViewport = inspectorScrollView != null ? inspectorScrollView.contentViewport : inspectorRoot?.panel?.visualTree;
+            if (inspectorViewport != null)
+                inspectorViewport.RegisterCallback<GeometryChangedEvent>(OnGraphSizingGeometryChanged);
+
+            ScheduleGraphSectionFit();
+        }
+
+        private void OnInspectorRootDetached(DetachFromPanelEvent evt)
+        {
+            if (inspectorViewport != null)
+                inspectorViewport.UnregisterCallback<GeometryChangedEvent>(OnGraphSizingGeometryChanged);
+
+            inspectorScrollView = null;
+            inspectorViewport = null;
+            graphFitScheduled = false;
+            fittingGraphSection = false;
+            graphSectionSized = false;
+        }
+
+        private void OnGraphSizingGeometryChanged(GeometryChangedEvent evt)
+        {
+            ScheduleGraphSectionFit();
+        }
+
+        private void ScheduleGraphSectionFit()
+        {
+            if (graphSection == null)
+                return;
+
+            if (TryFitGraphSectionToInspector())
+                return;
+
+            if (graphFitScheduled)
+                return;
+
+            graphFitScheduled = true;
+            graphSection.schedule.Execute(() =>
+            {
+                graphFitScheduled = false;
+                TryFitGraphSectionToInspector();
+            }).ExecuteLater(0);
+        }
+
+        private bool TryFitGraphSectionToInspector()
+        {
+            if (!HasValidGraphSizingBounds())
+                return false;
+
+            FitGraphSectionToInspector();
+            return true;
+        }
+
+        private bool HasValidGraphSizingBounds()
+        {
+            if (graphSection == null || graphSection.panel == null || graphSection.parent == null)
+                return false;
+
+            VisualElement viewport = GetInspectorViewport();
+            if (viewport == null)
+                return false;
+
+            return viewport.worldBound.width > 1f
+                && viewport.worldBound.height > 1f
+                && graphSection.parent.worldBound.width > 1f;
+        }
+
+        private void FitGraphSectionToInspector()
+        {
+            if (fittingGraphSection || graphSection == null || graphSection.panel == null)
+                return;
+
+            fittingGraphSection = true;
+            try
+            {
+                FitGraphSectionHorizontally();
+
+                float availableHeight = CalculateAvailableGraphSectionHeight();
+                float toolbarHeight = GetOuterHeight(graphToolbar, GraphToolbarFallbackHeight);
+                float graphAreaHeight = Mathf.Max(MinCombinedGraphHeight, availableHeight - toolbarHeight);
+                if (showCombinedGraph)
+                {
+                    SetSeparateGraphHeight(MinSeparateGraphHeight);
+                    SetCombinedGraphHeight(graphAreaHeight);
+                    graphSection.style.height = toolbarHeight + graphAreaHeight;
+                }
+                else
+                {
+                    float rowHeight = Mathf.Max(MinSeparateGraphHeight, Mathf.Floor(graphAreaHeight * 0.5f));
+                    SetSeparateGraphHeight(rowHeight);
+                    SetCombinedGraphHeight(MinCombinedGraphHeight);
+                    graphSection.style.height = toolbarHeight + rowHeight * 2f;
+                }
+
+                if (!graphSectionSized)
+                {
+                    graphSection.style.visibility = Visibility.Visible;
+                    graphSectionSized = true;
+                }
+
+                RepaintGraphs();
+            }
+            finally
+            {
+                fittingGraphSection = false;
+            }
+        }
+
+        private void FitGraphSectionHorizontally()
+        {
+            VisualElement viewport = GetInspectorViewport();
+            VisualElement parent = graphSection.parent;
+            if (viewport == null || parent == null)
+                return;
+
+            float parentWidth = parent.resolvedStyle.width;
+            if (float.IsNaN(parentWidth) || parentWidth <= 0f)
+                parentWidth = parent.worldBound.width;
+
+            float viewportWidth = viewport.resolvedStyle.width;
+            if (float.IsNaN(viewportWidth) || viewportWidth <= 0f)
+                viewportWidth = viewport.worldBound.width;
+
+            float desiredWidth = Mathf.Max(1f, Mathf.Min(parentWidth, viewportWidth) - GraphSectionHorizontalScrollbarGuard);
+
+            graphSection.style.marginLeft = 0;
+            graphSection.style.marginRight = 0;
+            graphSection.style.minWidth = 0;
+            graphSection.style.width = desiredWidth;
+            graphSection.style.maxWidth = desiredWidth;
+        }
+
+        private float CalculateAvailableGraphSectionHeight()
+        {
+            VisualElement viewport = GetInspectorViewport();
+            if (viewport == null)
+                return showCombinedGraph ? MinCombinedGraphHeight + GraphToolbarFallbackHeight : MinSeparateGraphHeight * 2f + GraphToolbarFallbackHeight;
+
+            float viewportHeight = viewport.resolvedStyle.height;
+            if (float.IsNaN(viewportHeight) || viewportHeight <= 0f)
+                viewportHeight = viewport.worldBound.height;
+
+            float graphTop = graphSection.worldBound.yMin - viewport.worldBound.yMin;
+            if (inspectorScrollView != null && inspectorScrollView.contentContainer != null)
+                graphTop = graphSection.worldBound.yMin - inspectorScrollView.contentContainer.worldBound.yMin;
+
+            float minimumHeight = showCombinedGraph ? MinCombinedGraphHeight + GraphToolbarFallbackHeight : MinSeparateGraphHeight * 2f + GraphToolbarFallbackHeight;
+            float remainingHeight = viewportHeight - Mathf.Max(0f, graphTop) - GraphSectionVerticalScrollbarGuard;
+            return Mathf.Max(minimumHeight, remainingHeight);
+        }
+
+        private VisualElement GetInspectorViewport()
+        {
+            if (inspectorViewport != null)
+                return inspectorViewport;
+
+            inspectorScrollView = inspectorRoot?.GetFirstAncestorOfType<ScrollView>();
+            inspectorViewport = inspectorScrollView != null ? inspectorScrollView.contentViewport : inspectorRoot?.panel?.visualTree;
+            return inspectorViewport;
+        }
+
+        private static float GetOuterHeight(VisualElement element, float fallback)
+        {
+            if (element == null)
+                return fallback;
+
+            float height = element.resolvedStyle.height;
+            if (float.IsNaN(height) || height <= 0f)
+                height = fallback;
+
+            return height + element.resolvedStyle.marginTop + element.resolvedStyle.marginBottom;
+        }
+
+        private void SetSeparateGraphHeight(float height)
+        {
+            if (separateGraphsContainer != null)
+                separateGraphsContainer.style.height = height * 2f;
+            if (separateGraphsTopRow != null)
+                separateGraphsTopRow.style.height = height;
+            if (separateGraphsBottomRow != null)
+                separateGraphsBottomRow.style.height = height;
+
+            positionGraph.style.height = height;
+            rotationGraph.style.height = height;
+            scaleGraph.style.height = height;
+            customGraph.style.height = height;
+        }
+
+        private void SetCombinedGraphHeight(float height)
+        {
+            if (combinedGraphContainer != null)
+                combinedGraphContainer.style.height = height;
+
+            combinedGraph.style.height = height;
+        }
+
         private VisualElement BuildCustomCurvesSection()
         {
             var foldout = new Foldout { text = "Custom Curves", value = false };
@@ -430,6 +650,7 @@ namespace Less3.CurveClips.Editor
             foldout.Add(toolbar);
 
             RebuildCurveList();
+            ScheduleGraphSectionFit();
             return foldout;
         }
 
@@ -437,13 +658,15 @@ namespace Less3.CurveClips.Editor
         {
             var root = new VisualElement();
             root.style.marginTop = 0;
-            root.style.marginLeft = -GraphSectionInspectorBleed;
-            root.style.marginRight = -GraphSectionInspectorBleed;
+            root.style.marginLeft = 0;
+            root.style.marginRight = 0;
             root.style.paddingLeft = 0;
             root.style.paddingRight = 0;
             root.style.paddingTop = 0;
             root.style.paddingBottom = 0;
+            root.style.minWidth = 0;
             root.style.backgroundColor = GraphSectionBackgroundColor();
+            root.style.visibility = Visibility.Hidden;
             showCombinedGraph = EditorPrefs.GetBool(CombinedGraphEditorPrefKey, false);
 
             positionGraph = CreateGraph("Position", CurveClipCurveGroup.Position, new Rect(-.1f, -1f, 1.2f, 2f));
@@ -452,14 +675,19 @@ namespace Less3.CurveClips.Editor
             customGraph = CreateGraph("Custom", CurveClipCurveGroup.Custom, new Rect(-.1f, 0f, 1.2f, 1f));
             combinedGraph = CreateCombinedGraph();
 
-            root.Add(CreateGraphModeSwitcher());
+            graphToolbar = CreateGraphModeSwitcher();
+            root.Add(graphToolbar);
 
             separateGraphsContainer = new VisualElement();
-            separateGraphsContainer.Add(CreateGraphRow(positionGraph, rotationGraph, true));
-            separateGraphsContainer.Add(CreateGraphRow(scaleGraph, customGraph, false));
+            separateGraphsContainer.style.minWidth = 0;
+            separateGraphsTopRow = CreateGraphRow(positionGraph, rotationGraph, true);
+            separateGraphsBottomRow = CreateGraphRow(scaleGraph, customGraph, false);
+            separateGraphsContainer.Add(separateGraphsTopRow);
+            separateGraphsContainer.Add(separateGraphsBottomRow);
             root.Add(separateGraphsContainer);
 
             combinedGraphContainer = new VisualElement();
+            combinedGraphContainer.style.minWidth = 0;
             combinedGraphContainer.Add(combinedGraph);
             root.Add(combinedGraphContainer);
 
@@ -510,6 +738,7 @@ namespace Less3.CurveClips.Editor
 
             separateModeToggle?.SetValueWithoutNotify(!showCombinedGraph);
             combinedModeToggle?.SetValueWithoutNotify(showCombinedGraph);
+            ScheduleGraphSectionFit();
             RepaintGraphs();
         }
 
@@ -518,13 +747,18 @@ namespace Less3.CurveClips.Editor
             var row = new VisualElement();
             row.style.flexDirection = FlexDirection.Row;
             row.style.marginBottom = 0;
+            row.style.minWidth = 0;
 
             left.style.flexGrow = 1;
+            left.style.flexShrink = 1;
             left.style.flexBasis = 0;
+            left.style.minWidth = 0;
             left.style.marginRight = 0;
 
             right.style.flexGrow = 1;
+            right.style.flexShrink = 1;
             right.style.flexBasis = 0;
+            right.style.minWidth = 0;
             right.style.marginLeft = 0;
 
             row.Add(left);
@@ -551,7 +785,7 @@ namespace Less3.CurveClips.Editor
                 SetCurveVisible,
                 RepaintGraphs,
                 defaultView);
-            graph.style.height = 200;
+            graph.style.height = MinSeparateGraphHeight;
             graph.style.marginBottom = 0;
 
             return graph;
@@ -569,7 +803,7 @@ namespace Less3.CurveClips.Editor
                 SetCurveVisible,
                 RepaintGraphs,
                 new Rect(-.1f, -90f, 1.2f, 180f));
-            graph.style.height = 420;
+            graph.style.height = MinCombinedGraphHeight;
             graph.style.marginBottom = 0;
             return graph;
         }
@@ -625,6 +859,7 @@ namespace Less3.CurveClips.Editor
 
             ApplyVisibilityChange();
             RebuildCurveList();
+            ScheduleGraphSectionFit();
             RepaintGraphs();
         }
 
@@ -652,6 +887,7 @@ namespace Less3.CurveClips.Editor
             EditorUtility.SetDirty(serializedObject.targetObject);
 
             RebuildCurveList();
+            ScheduleGraphSectionFit();
             RepaintGraphs();
         }
 
