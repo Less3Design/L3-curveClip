@@ -37,11 +37,21 @@ namespace Less3.CurveClips.Editor
         private void OnEnable()
         {
             previewStartTime = EditorApplication.timeSinceStartup;
+            Undo.undoRedoPerformed += OnUndoRedoPerformed;
         }
 
         private void OnDisable()
         {
+            Undo.undoRedoPerformed -= OnUndoRedoPerformed;
             CleanupPreview();
+        }
+
+        private void OnUndoRedoPerformed()
+        {
+            serializedObject.Update();
+            RebuildCurveList();
+            RepaintGraphs();
+            Repaint();
         }
 
         public override VisualElement CreateInspectorGUI()
@@ -946,6 +956,7 @@ namespace Less3.CurveClips.Editor
 
         public void FrameToFit()
         {
+            UpdateCurveVisibilityChip();
             FrameAll();
         }
 
