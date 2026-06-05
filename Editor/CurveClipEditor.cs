@@ -1241,10 +1241,27 @@ namespace Less3.CurveClips.Editor
 
         private void DrawCurves(Painter2D painter)
         {
-            IReadOnlyList<CurveChannel> channels = getChannels();
+            IReadOnlyList<CurveChannel> channels = getAllChannels();
             for (int i = 0; i < channels.Count; i++)
             {
                 CurveChannel channel = channels[i];
+                if (isChannelVisible(channel))
+                    continue;
+
+                SerializedProperty property = serializedObject.FindProperty(channel.CurvePath);
+                if (property == null)
+                    continue;
+
+                AnimationCurve curve = property.animationCurveValue;
+                DrawCurve(painter, curve, HiddenCurveColor());
+            }
+
+            for (int i = 0; i < channels.Count; i++)
+            {
+                CurveChannel channel = channels[i];
+                if (!isChannelVisible(channel))
+                    continue;
+
                 SerializedProperty property = serializedObject.FindProperty(channel.CurvePath);
                 if (property == null)
                     continue;
@@ -1253,6 +1270,13 @@ namespace Less3.CurveClips.Editor
                 DrawCurve(painter, curve, channel.Color);
                 DrawKeys(painter, channel, curve);
             }
+        }
+
+        private static Color HiddenCurveColor()
+        {
+            return EditorGUIUtility.isProSkin
+                ? new Color(0.82f, 0.82f, 0.82f, 0.22f)
+                : new Color(0.45f, 0.45f, 0.45f, 0.28f);
         }
 
         private void DrawCurve(Painter2D painter, AnimationCurve curve, Color color)
