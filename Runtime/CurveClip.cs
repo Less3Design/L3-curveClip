@@ -111,10 +111,6 @@ namespace Less3.CurveClips
         public CurveClipUpdateMode updateMode = CurveClipUpdateMode.DeltaTime;
         public CurveClipTransformSpace transformSpace = CurveClipTransformSpace.Local;
         public CurveClipValueMode valueMode = CurveClipValueMode.Relative;
-        public bool applyPosition = true;
-        public bool applyRotation = true;
-        public bool applyScale = true;
-        public bool sampleEndOnComplete = true;
 
         public AnimationCurve posX = AnimationCurve.Linear(0f, 0f, 1f, 0f);
         public AnimationCurve posY = AnimationCurve.Linear(0f, 0f, 1f, 0f);
@@ -178,16 +174,16 @@ namespace Less3.CurveClips
 
                     samples.Add(new CustomCurveSample(
                         customCurve.name,
-                        customCurve.curve.Evaluate(clampedTime)));
+                        customCurve.curve.Evaluate(normalizedTime)));
                 }
             }
 
             return new CurveClipSample(
                 clampedTime,
                 normalizedTime,
-                new Vector3(Evaluate(posX, clampedTime), Evaluate(posY, clampedTime), Evaluate(posZ, clampedTime)),
-                new Vector3(Evaluate(rotX, clampedTime), Evaluate(rotY, clampedTime), Evaluate(rotZ, clampedTime)),
-                new Vector3(Evaluate(scaleX, clampedTime), Evaluate(scaleY, clampedTime), Evaluate(scaleZ, clampedTime)),
+                new Vector3(Evaluate(posX, normalizedTime), Evaluate(posY, normalizedTime), Evaluate(posZ, normalizedTime)),
+                new Vector3(Evaluate(rotX, normalizedTime), Evaluate(rotY, normalizedTime), Evaluate(rotZ, normalizedTime)),
+                new Vector3(Evaluate(scaleX, normalizedTime), Evaluate(scaleY, normalizedTime), Evaluate(scaleZ, normalizedTime)),
                 samples);
         }
 
@@ -221,7 +217,7 @@ namespace Less3.CurveClips
                 elapsed += GetDeltaTime();
             }
 
-            if (target != null && sampleEndOnComplete)
+            if (target != null)
                 ApplyAndNotify(target, safeDuration, baseTransform, onCustomCurvesSampled);
 
             playback.Coroutine = null;
@@ -259,21 +255,16 @@ namespace Less3.CurveClips
 
             if (transformSpace == CurveClipTransformSpace.Local)
             {
-                if (applyPosition)
-                    target.localPosition = position;
-                if (applyRotation)
-                    target.localRotation = rotation;
+                target.localPosition = position;
+                target.localRotation = rotation;
             }
             else
             {
-                if (applyPosition)
-                    target.position = position;
-                if (applyRotation)
-                    target.rotation = rotation;
+                target.position = position;
+                target.rotation = rotation;
             }
 
-            if (applyScale)
-                target.localScale = scale;
+            target.localScale = scale;
         }
 
         private CurveClipBaseTransform CaptureBaseTransform(Transform target)
