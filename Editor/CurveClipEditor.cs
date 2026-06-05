@@ -369,8 +369,8 @@ namespace Less3.CurveClips.Editor
         private const float SelectionHandleSize = 8f;
         private const float ActiveTimeMin = 0f;
         private const float ActiveTimeMax = 1f;
-        private const float SingleKeyOverlayWidth = 120f;
-        private const float SingleKeyOverlayHeight = 44f;
+        private const float SingleKeyOverlayWidth = 96f;
+        private const float SingleKeyOverlayHeight = 36f;
 
         private readonly string title;
         private readonly SerializedObject serializedObject;
@@ -450,8 +450,8 @@ namespace Less3.CurveClips.Editor
             Add(highValueLabel);
             Add(lowValueLabel);
 
-            singleKeyTimeField = CreateSingleKeyField("time");
-            singleKeyValueField = CreateSingleKeyField("value");
+            singleKeyTimeField = CreateSingleKeyField("t");
+            singleKeyValueField = CreateSingleKeyField("v");
             singleKeyOverlay = CreateSingleKeyOverlay(singleKeyTimeField, singleKeyValueField);
             Add(singleKeyOverlay);
 
@@ -556,10 +556,10 @@ namespace Less3.CurveClips.Editor
             overlay.style.position = Position.Absolute;
             overlay.style.width = SingleKeyOverlayWidth;
             overlay.style.height = SingleKeyOverlayHeight;
-            overlay.style.paddingLeft = 5;
-            overlay.style.paddingRight = 5;
-            overlay.style.paddingTop = 4;
-            overlay.style.paddingBottom = 4;
+            overlay.style.paddingLeft = 4;
+            overlay.style.paddingRight = 4;
+            overlay.style.paddingTop = 3;
+            overlay.style.paddingBottom = 3;
             overlay.style.borderBottomLeftRadius = 3;
             overlay.style.borderBottomRightRadius = 3;
             overlay.style.borderTopLeftRadius = 3;
@@ -580,15 +580,18 @@ namespace Less3.CurveClips.Editor
         private FloatField CreateSingleKeyField(string label)
         {
             var field = new FloatField(label);
-            field.style.height = 18;
+            Color textColor = new Color(1f, 1f, 1f, 0.72f);
+            field.style.height = 15;
             field.style.marginLeft = 0;
             field.style.marginRight = 0;
             field.style.marginTop = 0;
-            field.style.marginBottom = 2;
-            field.style.color = Color.white;
-            field.labelElement.style.minWidth = 38;
-            field.labelElement.style.width = 38;
-            field.labelElement.style.color = Color.white;
+            field.style.marginBottom = 1;
+            field.style.fontSize = 9;
+            field.style.color = textColor;
+            field.labelElement.style.minWidth = 12;
+            field.labelElement.style.width = 12;
+            field.labelElement.style.fontSize = 9;
+            field.labelElement.style.color = textColor;
             return field;
         }
 
@@ -749,8 +752,8 @@ namespace Less3.CurveClips.Editor
             singleKeyValueField.SetValueWithoutNotify(key.value);
             updatingSingleKeyOverlay = false;
 
-            singleKeyOverlay.style.left = Mathf.Clamp(point.x + 10f, graphRect.xMin, Mathf.Max(graphRect.xMin, graphRect.xMax - SingleKeyOverlayWidth));
-            singleKeyOverlay.style.top = Mathf.Clamp(point.y - SingleKeyOverlayHeight - 8f, graphRect.yMin, Mathf.Max(graphRect.yMin, graphRect.yMax - SingleKeyOverlayHeight));
+            singleKeyOverlay.style.left = Mathf.Clamp(point.x + 16f, graphRect.xMin, Mathf.Max(graphRect.xMin, graphRect.xMax - SingleKeyOverlayWidth));
+            singleKeyOverlay.style.top = Mathf.Clamp(point.y - SingleKeyOverlayHeight - 14f, graphRect.yMin, Mathf.Max(graphRect.yMin, graphRect.yMax - SingleKeyOverlayHeight));
             singleKeyOverlay.style.display = DisplayStyle.Flex;
         }
 
@@ -1540,25 +1543,16 @@ namespace Less3.CurveClips.Editor
             if (channels.Count == 0)
                 return;
 
-            string targetPath = null;
-            foreach (string id in selection)
-            {
-                if (TryParseKeyId(id, out string path, out _))
-                {
-                    targetPath = path;
-                    break;
-                }
-            }
-
+            Vector2 graph = ScreenToGraph(screenPosition);
+            float time = Mathf.Clamp(graph.x, 0f, GetDuration());
+            string targetPath = FindClosestCurvePath(channels, time, graph.y);
             if (string.IsNullOrEmpty(targetPath))
-                targetPath = channels[0].CurvePath;
+                return;
 
             SerializedProperty property = serializedObject.FindProperty(targetPath);
             if (property == null)
                 return;
 
-            Vector2 graph = ScreenToGraph(screenPosition);
-            float time = Mathf.Clamp(graph.x, 0f, GetDuration());
             AnimationCurve curve = property.animationCurveValue;
             int index = curve.AddKey(time, curve.Evaluate(time));
             property.animationCurveValue = curve;
@@ -1569,6 +1563,29 @@ namespace Less3.CurveClips.Editor
             BeginKeyDrag(screenPosition);
             UpdateGraphOverlays();
             MarkDirtyRepaint();
+        }
+
+        private string FindClosestCurvePath(IReadOnlyList<CurveChannel> channels, float time, float value)
+        {
+            string closestPath = null;
+            float closestDistance = float.PositiveInfinity;
+
+            for (int i = 0; i < channels.Count; i++)
+            {
+                SerializedProperty property = serializedObject.FindProperty(channels[i].CurvePath);
+                if (property == null)
+                    continue;
+
+                AnimationCurve curve = property.animationCurveValue;
+                float distance = Mathf.Abs(curve.Evaluate(time) - value);
+                if (distance >= closestDistance)
+                    continue;
+
+                closestDistance = distance;
+                closestPath = channels[i].CurvePath;
+            }
+
+            return closestPath;
         }
 
         private void DeleteSelectedKeys()
