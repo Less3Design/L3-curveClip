@@ -362,6 +362,8 @@ namespace Less3.CurveClips.Editor
         private const float TopPadding = 6f;
         private const float RightPadding = 8f;
         private const float KeyHitRadius = 7f;
+        private const float SelectedKeyHitRadius = 12f;
+        private const float MarqueeDragThreshold = 4f;
         private const float KeyDrawRadius = 4f;
         private const float TangentHandleMinTimeDelta = 0.0001f;
         private const float SelectionHandleSize = 8f;
@@ -373,6 +375,7 @@ namespace Less3.CurveClips.Editor
         private readonly Rect defaultView;
         private readonly HashSet<string> selection = new HashSet<string>();
         private readonly List<KeyDragState> keyDragStates = new List<KeyDragState>();
+        private readonly List<KeyDragCurveState> keyDragCurveStates = new List<KeyDragCurveState>();
 
         private Rect view;
         private Rect graphRect;
@@ -559,7 +562,7 @@ namespace Less3.CurveClips.Editor
                 return;
 
             painter.strokeColor = color;
-            painter.lineWidth = 1.8f;
+            painter.lineWidth = 1f;
             painter.lineCap = LineCap.Round;
             painter.lineJoin = LineJoin.Round;
             painter.BeginPath();
@@ -579,7 +582,7 @@ namespace Less3.CurveClips.Editor
                         painter.Stroke();
                         painter.BeginPath();
                     }
-                    painter.dashPattern = new float[] { 2, 8 };
+                    painter.dashPattern = new float[] { 1, 4 };
                     isDashed = true;
                 }
                 else
@@ -695,16 +698,6 @@ namespace Less3.CurveClips.Editor
                 return;
             }
 
-            TangentDragState tangent = HitTangent(evt.localPosition);
-            if (tangent.IsValid)
-            {
-                tangentDragState = tangent;
-                interactionMode = InteractionMode.Tangent;
-                this.CapturePointer(evt.pointerId);
-                evt.StopPropagation();
-                return;
-            }
-
             KeyHit keyHit = HitKey(evt.localPosition);
             if (keyHit.IsValid)
             {
@@ -729,6 +722,16 @@ namespace Less3.CurveClips.Editor
                 return;
             }
 
+            TangentDragState tangent = HitTangent(evt.localPosition);
+            if (tangent.IsValid)
+            {
+                tangentDragState = tangent;
+                interactionMode = InteractionMode.Tangent;
+                this.CapturePointer(evt.pointerId);
+                evt.StopPropagation();
+                return;
+            }
+
             SelectionScaleHandle scaleHandle = HitSelectionScaleHandle(evt.localPosition);
             if (scaleHandle != SelectionScaleHandle.None)
             {
@@ -741,13 +744,10 @@ namespace Less3.CurveClips.Editor
             }
 
             additiveSelection = evt.shiftKey || evt.actionKey;
-            if (!additiveSelection)
-                selection.Clear();
-            interactionMode = InteractionMode.Marquee;
             pointerStart = evt.localPosition;
             pointerCurrent = evt.localPosition;
+            interactionMode = InteractionMode.PendingMarquee;
             this.CapturePointer(evt.pointerId);
-            MarkDirtyRepaint();
             evt.StopPropagation();
         }
 
@@ -760,7 +760,21 @@ namespace Less3.CurveClips.Editor
 
             pointerCurrent = evt.localPosition;
 
-            if (interactionMode == InteractionMode.Pan)
+            if (interactionMode == InteractionMode.PendingMarquee)
+            {
+                Vector2 mouse = evt.localPosition;
+                if ((mouse - pointerStart).sqrMagnitude < MarqueeDragThreshold * MarqueeDragThreshold)
+                {
+                    evt.StopPropagation();
+                    return;
+                }
+
+                interactionMode = InteractionMode.Marquee;
+                if (!additiveSelection)
+                    selection.Clear();
+                UpdateMarquee(mouse);
+            }
+            else if (interactionMode == InteractionMode.Pan)
                 UpdatePan(evt.localPosition);
             else if (interactionMode == InteractionMode.DragKeys)
                 UpdateKeyDrag(evt.localPosition);
@@ -780,12 +794,17 @@ namespace Less3.CurveClips.Editor
             if (interactionMode == InteractionMode.None)
                 return;
 
+            InteractionMode completedMode = interactionMode;
             interactionMode = InteractionMode.None;
             keyDragStates.Clear();
+            keyDragCurveStates.Clear();
             tangentDragState = default;
             activeScaleHandle = SelectionScaleHandle.None;
             if (this.HasPointerCapture(evt.pointerId))
                 this.ReleasePointer(evt.pointerId);
+
+            if (completedMode == InteractionMode.PendingMarquee && !additiveSelection)
+                selection.Clear();
 
             MarkDirtyRepaint();
             evt.StopPropagation();
@@ -858,6 +877,7 @@ namespace Less3.CurveClips.Editor
         {
             pointerStart = mouse;
             keyDragStates.Clear();
+            keyDragCurveStates.Clear();
 
             foreach (string id in selection)
             {
@@ -872,8 +892,22 @@ namespace Less3.CurveClips.Editor
                 if (index < 0 || index >= curve.length)
                     continue;
 
+                if (!HasKeyDragCurveState(path))
+                    keyDragCurveStates.Add(new KeyDragCurveState(path, curve.keys));
+
                 keyDragStates.Add(new KeyDragState(path, index, curve.keys[index]));
             }
+        }
+
+        private bool HasKeyDragCurveState(string path)
+        {
+            for (int i = 0; i < keyDragCurveStates.Count; i++)
+            {
+                if (keyDragCurveStates[i].Path == path)
+                    return true;
+            }
+
+            return false;
         }
 
         private void UpdateKeyDrag(Vector2 mouse)
@@ -986,19 +1020,23 @@ namespace Less3.CurveClips.Editor
             }
 
             selection.Clear();
-            foreach (KeyValuePair<string, List<KeyDragState>> pair in byPath)
+            foreach (KeyDragCurveState curveState in keyDragCurveStates)
             {
-                SerializedProperty property = serializedObject.FindProperty(pair.Key);
+                if (!byPath.TryGetValue(curveState.Path, out List<KeyDragState> states))
+                    continue;
+
+                SerializedProperty property = serializedObject.FindProperty(curveState.Path);
                 if (property == null)
                     continue;
 
                 AnimationCurve curve = property.animationCurveValue;
-                Keyframe[] keys = curve.keys;
-                List<Keyframe> transformed = new List<Keyframe>(keys);
+                List<TransformedKey> transformed = new List<TransformedKey>(curveState.OriginalKeys.Length);
+                for (int i = 0; i < curveState.OriginalKeys.Length; i++)
+                    transformed.Add(new TransformedKey(curveState.OriginalKeys[i], false));
 
-                for (int i = 0; i < pair.Value.Count; i++)
+                for (int i = 0; i < states.Count; i++)
                 {
-                    KeyDragState state = pair.Value[i];
+                    KeyDragState state = states[i];
                     if (state.Index < 0 || state.Index >= transformed.Count)
                         continue;
 
@@ -1006,28 +1044,36 @@ namespace Less3.CurveClips.Editor
                     Keyframe key = state.OriginalKey;
                     key.time = next.x;
                     key.value = next.y;
-                    transformed[state.Index] = key;
+                    transformed[state.Index] = new TransformedKey(key, true);
                 }
 
-                transformed.Sort((a, b) => a.time.CompareTo(b.time));
-                curve.keys = transformed.ToArray();
-                property.animationCurveValue = curve;
+                transformed.Sort((a, b) => a.Key.time.CompareTo(b.Key.time));
 
+                Keyframe[] nextKeys = new Keyframe[transformed.Count];
                 for (int i = 0; i < transformed.Count; i++)
                 {
-                    for (int j = 0; j < pair.Value.Count; j++)
-                    {
-                        Vector2 next = transform(pair.Value[j]);
-                        if (Mathf.Abs(transformed[i].time - next.x) < 0.0001f && Mathf.Abs(transformed[i].value - next.y) < 0.0001f)
-                            selection.Add(KeyId(pair.Key, i));
-                    }
+                    nextKeys[i] = transformed[i].Key;
+                    if (transformed[i].Selected)
+                        selection.Add(KeyId(curveState.Path, i));
                 }
+
+                curve.keys = nextKeys;
+                property.animationCurveValue = curve;
             }
 
             ApplyCurveChange();
         }
 
         private KeyHit HitKey(Vector2 mouse)
+        {
+            KeyHit selectedHit = HitKey(mouse, true, SelectedKeyHitRadius);
+            if (selectedHit.IsValid)
+                return selectedHit;
+
+            return HitKey(mouse, false, KeyHitRadius);
+        }
+
+        private KeyHit HitKey(Vector2 mouse, bool selectedOnly, float radius)
         {
             IReadOnlyList<CurveChannel> channels = getChannels();
             KeyHit best = default;
@@ -1043,9 +1089,13 @@ namespace Less3.CurveClips.Editor
                 Keyframe[] keys = curve.keys;
                 for (int i = 0; i < keys.Length; i++)
                 {
+                    string id = KeyId(channels[c].CurvePath, i);
+                    if (selectedOnly && !selection.Contains(id))
+                        continue;
+
                     Vector2 point = GraphToScreen(keys[i].time, keys[i].value);
                     float distance = Vector2.Distance(point, mouse);
-                    if (distance <= KeyHitRadius && distance < bestDistance)
+                    if (distance <= radius && distance < bestDistance)
                     {
                         bestDistance = distance;
                         best = new KeyHit(channels[c].CurvePath, i);
@@ -1581,6 +1631,30 @@ namespace Less3.CurveClips.Editor
             }
         }
 
+        private readonly struct KeyDragCurveState
+        {
+            public readonly string Path;
+            public readonly Keyframe[] OriginalKeys;
+
+            public KeyDragCurveState(string path, Keyframe[] originalKeys)
+            {
+                Path = path;
+                OriginalKeys = originalKeys;
+            }
+        }
+
+        private readonly struct TransformedKey
+        {
+            public readonly Keyframe Key;
+            public readonly bool Selected;
+
+            public TransformedKey(Keyframe key, bool selected)
+            {
+                Key = key;
+                Selected = selected;
+            }
+        }
+
         private readonly struct TangentDragState
         {
             public readonly string Path;
@@ -1602,6 +1676,7 @@ namespace Less3.CurveClips.Editor
             Pan,
             DragKeys,
             Tangent,
+            PendingMarquee,
             Marquee,
             ScaleSelection
         }
