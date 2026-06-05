@@ -367,6 +367,8 @@ namespace Less3.CurveClips.Editor
         private const float KeyDrawRadius = 4f;
         private const float TangentHandleMinTimeDelta = 0.0001f;
         private const float SelectionHandleSize = 8f;
+        private const float ActiveTimeMin = 0f;
+        private const float ActiveTimeMax = 1f;
 
         private readonly string title;
         private readonly SerializedObject serializedObject;
@@ -478,6 +480,24 @@ namespace Less3.CurveClips.Editor
             Rect rect = contentRect;
             FillRect(painter, rect, EditorGUIUtility.isProSkin ? new Color(0.13f, 0.13f, 0.13f) : new Color(0.70f, 0.70f, 0.70f));
             FillRect(painter, graphRect, EditorGUIUtility.isProSkin ? new Color(0.105f, 0.105f, 0.105f) : new Color(0.82f, 0.82f, 0.82f));
+            DrawInactiveTimeBackground(painter);
+        }
+
+        private void DrawInactiveTimeBackground(Painter2D painter)
+        {
+            Color inactive = EditorGUIUtility.isProSkin ? new Color(0f, 0f, 0f, 0.30f) : new Color(0f, 0f, 0f, 0.12f);
+            Rect activeRect = GetActiveTimeScreenRect();
+
+            if (activeRect.width <= 0f)
+            {
+                FillRect(painter, graphRect, inactive);
+                return;
+            }
+
+            if (activeRect.xMin > graphRect.xMin)
+                FillRect(painter, Rect.MinMaxRect(graphRect.xMin, graphRect.yMin, activeRect.xMin, graphRect.yMax), inactive);
+            if (activeRect.xMax < graphRect.xMax)
+                FillRect(painter, Rect.MinMaxRect(activeRect.xMax, graphRect.yMin, graphRect.xMax, graphRect.yMax), inactive);
         }
 
         private void DrawHeader(Painter2D painter)
@@ -497,12 +517,7 @@ namespace Less3.CurveClips.Editor
 
             DrawVerticalGrid(painter, minor, major);
             DrawHorizontalGrid(painter, minor, major);
-
-            if (view.yMin < 0f && view.yMax > 0f)
-            {
-                float y = ValueToY(0f);
-                DrawLine(painter, new Vector2(graphRect.xMin, y), new Vector2(graphRect.xMax, y), major, 1.5f);
-            }
+            DrawReferenceLines(painter);
 
             float duration = GetDuration();
             float durationX = TimeToX(duration);
@@ -510,12 +525,43 @@ namespace Less3.CurveClips.Editor
                 DrawLine(painter, new Vector2(durationX, graphRect.yMin), new Vector2(durationX, graphRect.yMax), new Color(1f, 1f, 1f, 0.18f), 1.5f);
         }
 
+        private void DrawReferenceLines(Painter2D painter)
+        {
+            Color color = EditorGUIUtility.isProSkin ? new Color(1f, 1f, 1f, 0.24f) : new Color(0f, 0f, 0f, 0.28f);
+
+            DrawVerticalReferenceLine(painter, ActiveTimeMin, color);
+            DrawVerticalReferenceLine(painter, ActiveTimeMax, color);
+
+            if (view.yMin < 0f && view.yMax > 0f)
+            {
+                float y = ValueToY(0f);
+                DrawDashedLine(painter, new Vector2(graphRect.xMin, y), new Vector2(graphRect.xMax, y), color, 1.5f);
+            }
+        }
+
+        private void DrawVerticalReferenceLine(Painter2D painter, float time, Color color)
+        {
+            if (time < view.xMin || time > view.xMax)
+                return;
+
+            float x = TimeToX(time);
+            DrawDashedLine(painter, new Vector2(x, graphRect.yMin), new Vector2(x, graphRect.yMax), color, 1.5f);
+        }
+
         private void DrawVerticalGrid(Painter2D painter, Color minor, Color major)
         {
             float step = NiceStep(view.width / 8f);
-            float first = Mathf.Floor(view.xMin / step) * step;
-            for (float time = first; time <= view.xMax; time += step)
+            float visibleMin = Mathf.Max(view.xMin, ActiveTimeMin);
+            float visibleMax = Mathf.Min(view.xMax, ActiveTimeMax);
+            if (visibleMax <= visibleMin)
+                return;
+
+            float first = Mathf.Floor(visibleMin / step) * step;
+            for (float time = first; time <= visibleMax; time += step)
             {
+                if (time < visibleMin || time > visibleMax)
+                    continue;
+
                 float x = TimeToX(time);
                 if (x < graphRect.xMin || x > graphRect.xMax)
                     continue;
@@ -527,6 +573,10 @@ namespace Less3.CurveClips.Editor
 
         private void DrawHorizontalGrid(Painter2D painter, Color minor, Color major)
         {
+            Rect activeRect = GetActiveTimeScreenRect();
+            if (activeRect.width <= 0f)
+                return;
+
             float step = NiceStep(view.height / 6f);
             float first = Mathf.Floor(view.yMin / step) * step;
             for (float value = first; value <= view.yMax; value += step)
@@ -536,8 +586,23 @@ namespace Less3.CurveClips.Editor
                     continue;
 
                 bool isMajor = Mathf.Abs(Mathf.Repeat(value / step, 2f)) < 0.01f;
-                DrawLine(painter, new Vector2(graphRect.xMin, y), new Vector2(graphRect.xMax, y), isMajor ? major : minor, isMajor ? 1.1f : 1f);
+                DrawLine(painter, new Vector2(activeRect.xMin, y), new Vector2(activeRect.xMax, y), isMajor ? major : minor, isMajor ? 1.1f : 1f);
             }
+        }
+
+        private Rect GetActiveTimeScreenRect()
+        {
+            float minTime = Mathf.Max(view.xMin, ActiveTimeMin);
+            float maxTime = Mathf.Min(view.xMax, ActiveTimeMax);
+            if (maxTime <= minTime)
+                return default;
+
+            float xMin = Mathf.Clamp(TimeToX(minTime), graphRect.xMin, graphRect.xMax);
+            float xMax = Mathf.Clamp(TimeToX(maxTime), graphRect.xMin, graphRect.xMax);
+            if (xMax <= xMin)
+                return default;
+
+            return Rect.MinMaxRect(xMin, graphRect.yMin, xMax, graphRect.yMax);
         }
 
         private void DrawCurves(Painter2D painter)
@@ -654,10 +719,15 @@ namespace Less3.CurveClips.Editor
 
             if (selection.Count > 1)
             {
+                Vector2 center = selectionBounds.center;
                 FillRect(painter, RectFromCenter(selectionBounds.min, SelectionHandleSize), border);
                 FillRect(painter, RectFromCenter(new Vector2(selectionBounds.xMax, selectionBounds.yMin), SelectionHandleSize), border);
                 FillRect(painter, RectFromCenter(new Vector2(selectionBounds.xMin, selectionBounds.yMax), SelectionHandleSize), border);
                 FillRect(painter, RectFromCenter(selectionBounds.max, SelectionHandleSize), border);
+                FillRect(painter, RectFromCenter(new Vector2(selectionBounds.xMin, center.y), SelectionHandleSize), border);
+                FillRect(painter, RectFromCenter(new Vector2(selectionBounds.xMax, center.y), SelectionHandleSize), border);
+                FillRect(painter, RectFromCenter(new Vector2(center.x, selectionBounds.yMin), SelectionHandleSize), border);
+                FillRect(painter, RectFromCenter(new Vector2(center.x, selectionBounds.yMax), SelectionHandleSize), border);
             }
         }
 
@@ -1000,8 +1070,8 @@ namespace Less3.CurveClips.Editor
             BeginKeyDrag(mouse);
 
             Rect bounds = GetSelectionGraphBounds();
-            bool anchorRight = handle == SelectionScaleHandle.TopLeft || handle == SelectionScaleHandle.BottomLeft;
-            bool anchorTop = handle == SelectionScaleHandle.BottomLeft || handle == SelectionScaleHandle.BottomRight;
+            bool anchorRight = handle == SelectionScaleHandle.TopLeft || handle == SelectionScaleHandle.BottomLeft || handle == SelectionScaleHandle.Left;
+            bool anchorTop = handle == SelectionScaleHandle.BottomLeft || handle == SelectionScaleHandle.BottomRight || handle == SelectionScaleHandle.Bottom;
             scaleAnchor = new Vector2(anchorRight ? bounds.xMax : bounds.xMin, anchorTop ? bounds.yMax : bounds.yMin);
         }
 
@@ -1010,8 +1080,8 @@ namespace Less3.CurveClips.Editor
             Vector2 current = ScreenToGraph(mouse);
             float startX = selectionStartGraph.x - scaleAnchor.x;
             float startY = selectionStartGraph.y - scaleAnchor.y;
-            float scaleX = Mathf.Abs(startX) > 0.0001f ? (current.x - scaleAnchor.x) / startX : 1f;
-            float scaleY = Mathf.Abs(startY) > 0.0001f ? (current.y - scaleAnchor.y) / startY : 1f;
+            float scaleX = ScalesTime(activeScaleHandle) && Mathf.Abs(startX) > 0.0001f ? (current.x - scaleAnchor.x) / startX : 1f;
+            float scaleY = ScalesValue(activeScaleHandle) && Mathf.Abs(startY) > 0.0001f ? (current.y - scaleAnchor.y) / startY : 1f;
             float duration = GetDuration();
 
             ApplyKeyTransform(state => new Vector2(
@@ -1164,7 +1234,37 @@ namespace Less3.CurveClips.Editor
             if (RectFromCenter(bounds.max, SelectionHandleSize + 3f).Contains(mouse))
                 return SelectionScaleHandle.BottomRight;
 
+            Vector2 center = bounds.center;
+            if (RectFromCenter(new Vector2(bounds.xMin, center.y), SelectionHandleSize + 3f).Contains(mouse))
+                return SelectionScaleHandle.Left;
+            if (RectFromCenter(new Vector2(bounds.xMax, center.y), SelectionHandleSize + 3f).Contains(mouse))
+                return SelectionScaleHandle.Right;
+            if (RectFromCenter(new Vector2(center.x, bounds.yMin), SelectionHandleSize + 3f).Contains(mouse))
+                return SelectionScaleHandle.Top;
+            if (RectFromCenter(new Vector2(center.x, bounds.yMax), SelectionHandleSize + 3f).Contains(mouse))
+                return SelectionScaleHandle.Bottom;
+
             return SelectionScaleHandle.None;
+        }
+
+        private static bool ScalesTime(SelectionScaleHandle handle)
+        {
+            return handle == SelectionScaleHandle.TopLeft
+                || handle == SelectionScaleHandle.TopRight
+                || handle == SelectionScaleHandle.BottomLeft
+                || handle == SelectionScaleHandle.BottomRight
+                || handle == SelectionScaleHandle.Left
+                || handle == SelectionScaleHandle.Right;
+        }
+
+        private static bool ScalesValue(SelectionScaleHandle handle)
+        {
+            return handle == SelectionScaleHandle.TopLeft
+                || handle == SelectionScaleHandle.TopRight
+                || handle == SelectionScaleHandle.BottomLeft
+                || handle == SelectionScaleHandle.BottomRight
+                || handle == SelectionScaleHandle.Top
+                || handle == SelectionScaleHandle.Bottom;
         }
 
         private void AddKeyAt(Vector2 screenPosition)
@@ -1601,12 +1701,25 @@ namespace Less3.CurveClips.Editor
 
         private static void DrawLine(Painter2D painter, Vector2 from, Vector2 to, Color color, float width)
         {
+            painter.dashPattern = new float[] { 1 };
             painter.strokeColor = color;
             painter.lineWidth = width;
             painter.BeginPath();
             painter.MoveTo(from);
             painter.LineTo(to);
             painter.Stroke();
+        }
+
+        private static void DrawDashedLine(Painter2D painter, Vector2 from, Vector2 to, Color color, float width)
+        {
+            painter.dashPattern = new float[] { 5, 4 };
+            painter.strokeColor = color;
+            painter.lineWidth = width;
+            painter.BeginPath();
+            painter.MoveTo(from);
+            painter.LineTo(to);
+            painter.Stroke();
+            painter.dashPattern = new float[] { 1 };
         }
 
         private static void FillRect(Painter2D painter, Rect rect, Color color)
@@ -1729,7 +1842,11 @@ namespace Less3.CurveClips.Editor
             TopLeft,
             TopRight,
             BottomLeft,
-            BottomRight
+            BottomRight,
+            Left,
+            Right,
+            Top,
+            Bottom
         }
 
         private enum TangentPreset
