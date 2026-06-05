@@ -127,9 +127,21 @@ namespace Less3.CurveClips.Editor
                 serializedObject,
                 serializedObject.FindProperty("duration"),
                 () => GetChannels(group),
+                () => GetChannels(group, false),
+                IsVisible,
+                SetCurveVisible,
                 defaultView);
-            graph.style.height = 300;
-            graph.style.marginBottom = 6;
+            graph.style.height = 200;
+            graph.style.marginBottom = 0;
+            graph.style.borderBottomWidth = 8;
+            graph.style.borderTopWidth = 8;
+            graph.style.borderLeftWidth = 8;
+            graph.style.borderRightWidth = 8;
+            graph.style.borderBottomColor = Color.black;
+            graph.style.borderTopColor = Color.black;
+            graph.style.borderLeftColor = Color.black;
+            graph.style.borderRightColor = Color.black;
+       
             return graph;
         }
 
@@ -175,8 +187,7 @@ namespace Less3.CurveClips.Editor
             visible.style.width = 18;
             visible.RegisterValueChangedCallback(evt =>
             {
-                curveVisibility[channel.VisibilityKey] = evt.newValue;
-                RepaintGraphs();
+                SetCurveVisible(channel, evt.newValue);
             });
             row.Add(visible);
 
@@ -198,6 +209,7 @@ namespace Less3.CurveClips.Editor
                 nameField.BindProperty(nameProperty);
                 nameField.style.width = 82;
                 nameField.style.marginRight = 4;
+                nameField.RegisterValueChangedCallback(_ => RepaintGraphs());
                 row.Add(nameField);
             }
             else
@@ -235,6 +247,13 @@ namespace Less3.CurveClips.Editor
                     curveVisibility[channels[i].VisibilityKey] = visible;
             }
 
+            RebuildCurveList();
+            RepaintGraphs();
+        }
+
+        private void SetCurveVisible(CurveChannel channel, bool visible)
+        {
+            curveVisibility[channel.VisibilityKey] = visible;
             RebuildCurveList();
             RepaintGraphs();
         }
@@ -356,11 +375,10 @@ namespace Less3.CurveClips.Editor
 
     internal sealed class CurveClipGraphElement : VisualElement
     {
-        private const float HeaderHeight = 24f;
         private const float LeftGutter = 0f;
         private const float BottomGutter = 0f;
         private const float TopPadding = 0f;
-        private const float RightPadding = 8f;
+        private const float RightPadding = 0f;
         private const float KeyHitRadius = 7f;
         private const float SelectedKeyHitRadius = 12f;
         private const float MarqueeDragThreshold = 4f;
@@ -371,11 +389,15 @@ namespace Less3.CurveClips.Editor
         private const float ActiveTimeMax = 1f;
         private const float SingleKeyOverlayWidth = 96f;
         private const float SingleKeyOverlayHeight = 36f;
+        private const float WheelZoomStep = 1.08f;
+        private const double WheelZoomDuration = 0.055;
 
-        private readonly string title;
         private readonly SerializedObject serializedObject;
         private readonly SerializedProperty durationProperty;
         private readonly Func<IReadOnlyList<CurveChannel>> getChannels;
+        private readonly Func<IReadOnlyList<CurveChannel>> getAllChannels;
+        private readonly Func<CurveChannel, bool> isChannelVisible;
+        private readonly Action<CurveChannel, bool> setChannelVisible;
         private readonly Rect defaultView;
         private readonly HashSet<string> selection = new HashSet<string>();
         private readonly List<KeyDragState> keyDragStates = new List<KeyDragState>();
@@ -385,8 +407,13 @@ namespace Less3.CurveClips.Editor
         private readonly VisualElement singleKeyOverlay;
         private readonly FloatField singleKeyTimeField;
         private readonly FloatField singleKeyValueField;
+        private readonly VisualElement titleChip;
+        private readonly VisualElement curveVisibilityChip;
+        private readonly Button fitChip;
 
         private Rect view;
+        private Rect zoomStartView;
+        private Rect zoomTargetView;
         private Rect graphRect;
         private Vector2 lastMousePosition;
         private Vector2 pointerStart;
@@ -398,20 +425,28 @@ namespace Less3.CurveClips.Editor
         private SelectionScaleHandle activeScaleHandle;
         private InteractionMode interactionMode;
         private TangentDragState tangentDragState;
+        private double zoomAnimationStartTime;
         private bool additiveSelection;
         private bool updatingSingleKeyOverlay;
+        private bool zoomAnimationActive;
+        private bool zoomAnimationScheduled;
 
         public CurveClipGraphElement(
             string title,
             SerializedObject serializedObject,
             SerializedProperty durationProperty,
             Func<IReadOnlyList<CurveChannel>> getChannels,
+            Func<IReadOnlyList<CurveChannel>> getAllChannels,
+            Func<CurveChannel, bool> isChannelVisible,
+            Action<CurveChannel, bool> setChannelVisible,
             Rect defaultView)
         {
-            this.title = title;
             this.serializedObject = serializedObject;
             this.durationProperty = durationProperty;
             this.getChannels = getChannels;
+            this.getAllChannels = getAllChannels;
+            this.isChannelVisible = isChannelVisible;
+            this.setChannelVisible = setChannelVisible;
             this.defaultView = defaultView;
             view = defaultView;
 
@@ -427,24 +462,6 @@ namespace Less3.CurveClips.Editor
             style.borderRightWidth = 1;
             style.backgroundColor = EditorGUIUtility.isProSkin ? new Color(0.16f, 0.16f, 0.16f) : new Color(0.76f, 0.76f, 0.76f);
 
-            var titleLabel = new Label(title);
-            titleLabel.pickingMode = PickingMode.Ignore;
-            titleLabel.style.position = Position.Absolute;
-            titleLabel.style.left = 10;
-            titleLabel.style.top = 4;
-            titleLabel.style.height = 18;
-            titleLabel.style.unityFontStyleAndWeight = FontStyle.Bold;
-            Add(titleLabel);
-
-            var fitButton = new Button(FrameAll) { text = "Fit" };
-            fitButton.tooltip = "Frame visible curves";
-            fitButton.style.position = Position.Absolute;
-            fitButton.style.right = 8;
-            fitButton.style.top = 2;
-            fitButton.style.width = 44;
-            fitButton.style.height = 20;
-            Add(fitButton);
-
             highValueLabel = CreateValueGuideLabel();
             lowValueLabel = CreateValueGuideLabel();
             Add(highValueLabel);
@@ -455,6 +472,14 @@ namespace Less3.CurveClips.Editor
             singleKeyOverlay = CreateSingleKeyOverlay(singleKeyTimeField, singleKeyValueField);
             Add(singleKeyOverlay);
 
+            titleChip = CreateTitleChip(title);
+            curveVisibilityChip = CreateCurveVisibilityChip();
+            fitChip = CreateFitChip();
+            Add(titleChip);
+            Add(curveVisibilityChip);
+            Add(fitChip);
+            UpdateCurveVisibilityChip();
+
             singleKeyTimeField.RegisterValueChangedCallback(evt => ApplySingleKeyOverlayEdit(true, evt.newValue));
             singleKeyValueField.RegisterValueChangedCallback(evt => ApplySingleKeyOverlayEdit(false, evt.newValue));
 
@@ -464,13 +489,22 @@ namespace Less3.CurveClips.Editor
             RegisterCallback<PointerUpEvent>(OnPointerUp);
             RegisterCallback<WheelEvent>(OnWheel);
             RegisterCallback<KeyDownEvent>(OnKeyDown);
-            RegisterCallback<GeometryChangedEvent>(_ => UpdateGraphOverlays());
+            RegisterCallback<GeometryChangedEvent>(OnGeometryChanged);
             this.AddManipulator(new ContextualMenuManipulator(BuildContextMenu));
+        }
+
+        private void OnGeometryChanged(GeometryChangedEvent evt)
+        {
+            UpdateGraphRect();
+            UpdateCurveVisibilityChip();
+            UpdateGraphOverlays();
+            MarkDirtyRepaint();
         }
 
         public void Refresh()
         {
             UpdateGraphRect();
+            UpdateCurveVisibilityChip();
             UpdateGraphOverlays();
             MarkDirtyRepaint();
         }
@@ -486,7 +520,6 @@ namespace Less3.CurveClips.Editor
             DrawValueExtentGuides(painter);
             DrawCurves(painter);
             DrawSelection(painter);
-            DrawHeader(painter);
             DrawMarquee(painter);
         }
 
@@ -495,9 +528,16 @@ namespace Less3.CurveClips.Editor
             Rect rect = contentRect;
             graphRect = new Rect(
                 rect.xMin + LeftGutter,
-                rect.yMin + HeaderHeight + TopPadding,
+                rect.yMin + TopPadding,
                 Mathf.Max(1f, rect.width - LeftGutter - RightPadding),
-                Mathf.Max(1f, rect.height - HeaderHeight - BottomGutter - TopPadding));
+                Mathf.Max(1f, rect.height - BottomGutter - TopPadding));
+        }
+
+        private bool HasUsableGraphRect()
+        {
+            Rect rect = contentRect;
+            return rect.width > LeftGutter + RightPadding + 1f
+                && rect.height > TopPadding + BottomGutter + 1f;
         }
 
         private void DrawBackground(Painter2D painter)
@@ -525,16 +565,6 @@ namespace Less3.CurveClips.Editor
                 FillRect(painter, Rect.MinMaxRect(activeRect.xMax, graphRect.yMin, graphRect.xMax, graphRect.yMax), inactive);
         }
 
-        private void DrawHeader(Painter2D painter)
-        {
-            Rect rect = contentRect;
-            FillRect(painter, new Rect(rect.xMin, rect.yMin, rect.width, HeaderHeight), EditorGUIUtility.isProSkin ? new Color(0.18f, 0.18f, 0.18f) : new Color(0.67f, 0.67f, 0.67f));
-
-            // Painter2D has no text API; use a compact title tab shape as the visual anchor.
-            Color tab = EditorGUIUtility.isProSkin ? new Color(0.28f, 0.28f, 0.28f) : new Color(0.52f, 0.52f, 0.52f);
-            FillRect(painter, new Rect(rect.xMin + 6f, rect.yMin + 6f, Mathf.Clamp(title.Length * 7f + 18f, 58f, 110f), 12f), tab);
-        }
-
         private Label CreateValueGuideLabel()
         {
             var label = new Label();
@@ -548,6 +578,144 @@ namespace Less3.CurveClips.Editor
             label.style.backgroundColor = Color.clear;
             label.style.display = DisplayStyle.None;
             return label;
+        }
+
+        private Label CreateTitleChip(string text)
+        {
+            var label = new Label(text);
+            label.pickingMode = PickingMode.Ignore;
+            label.style.position = Position.Absolute;
+            label.style.left = 8;
+            label.style.top = 6;
+            label.style.width = Mathf.Clamp(text.Length * 6f + 14f, 42f, 110f);
+            label.style.height = 17;
+            label.style.paddingLeft = 6;
+            label.style.paddingRight = 6;
+            label.style.unityTextAlign = TextAnchor.MiddleCenter;
+            label.style.fontSize = 10;
+            label.style.unityFontStyleAndWeight = FontStyle.Normal;
+            label.style.color = new Color(1f, 1f, 1f, 0.78f);
+            label.style.backgroundColor = new Color(0f, 0f, 0f, 0.68f);
+            label.style.borderTopLeftRadius = 4;
+            label.style.borderTopRightRadius = 4;
+            label.style.borderBottomLeftRadius = 4;
+            label.style.borderBottomRightRadius = 4;
+            return label;
+        }
+
+        private VisualElement CreateCurveVisibilityChip()
+        {
+            var chip = new VisualElement();
+            chip.style.position = Position.Absolute;
+            chip.style.left = 8;
+            chip.style.top = 28;
+            chip.style.flexDirection = FlexDirection.Column;
+            chip.style.flexWrap = Wrap.NoWrap;
+            chip.style.alignItems = Align.FlexStart;
+            chip.style.maxWidth = 240;
+            chip.style.paddingLeft = 6;
+            chip.style.paddingRight = 6;
+            chip.style.paddingTop = 4;
+            chip.style.paddingBottom = 3;
+            chip.style.backgroundColor = new Color(0f, 0f, 0f, 0.60f);
+            chip.style.borderTopLeftRadius = 4;
+            chip.style.borderTopRightRadius = 4;
+            chip.style.borderBottomLeftRadius = 4;
+            chip.style.borderBottomRightRadius = 4;
+            chip.RegisterCallback<PointerDownEvent>(evt => evt.StopPropagation());
+            chip.RegisterCallback<PointerMoveEvent>(evt => evt.StopPropagation());
+            chip.RegisterCallback<PointerUpEvent>(evt => evt.StopPropagation());
+            return chip;
+        }
+
+        private void UpdateCurveVisibilityChip()
+        {
+            curveVisibilityChip.Clear();
+
+            IReadOnlyList<CurveChannel> channels = getAllChannels();
+            if (channels.Count == 0)
+            {
+                curveVisibilityChip.style.display = DisplayStyle.None;
+                return;
+            }
+
+            curveVisibilityChip.style.display = DisplayStyle.Flex;
+            for (int i = 0; i < channels.Count; i++)
+                curveVisibilityChip.Add(CreateCurveVisibilityEntry(channels[i]));
+        }
+
+        private VisualElement CreateCurveVisibilityEntry(CurveChannel channel)
+        {
+            bool visible = isChannelVisible(channel);
+
+            var entry = new VisualElement();
+            entry.style.flexDirection = FlexDirection.Row;
+            entry.style.alignItems = Align.Center;
+            entry.style.height = 14;
+            entry.style.marginBottom = 1;
+
+            var swatch = new VisualElement();
+            swatch.tooltip = visible ? "Hide " + channel.Label : "Show " + channel.Label;
+            swatch.style.width = 9;
+            swatch.style.height = 9;
+            swatch.style.marginRight = 4;
+            swatch.style.backgroundColor = WithAlpha(channel.Color, visible ? 1f : 0.26f);
+            swatch.style.borderTopLeftRadius = 2;
+            swatch.style.borderTopRightRadius = 2;
+            swatch.style.borderBottomLeftRadius = 2;
+            swatch.style.borderBottomRightRadius = 2;
+            swatch.style.borderTopColor = new Color(1f, 1f, 1f, visible ? 0.34f : 0.12f);
+            swatch.style.borderRightColor = swatch.style.borderTopColor;
+            swatch.style.borderBottomColor = swatch.style.borderTopColor;
+            swatch.style.borderLeftColor = swatch.style.borderTopColor;
+            swatch.style.borderTopWidth = 1;
+            swatch.style.borderRightWidth = 1;
+            swatch.style.borderBottomWidth = 1;
+            swatch.style.borderLeftWidth = 1;
+            swatch.RegisterCallback<PointerDownEvent>(evt =>
+            {
+                if (evt.button != 0)
+                    return;
+
+                setChannelVisible(channel, !visible);
+                evt.StopPropagation();
+            });
+            entry.Add(swatch);
+
+            var label = new Label(channel.Label);
+            label.pickingMode = PickingMode.Ignore;
+            label.style.fontSize = 9;
+            label.style.height = 13;
+            label.style.maxWidth = 72;
+            label.style.unityTextAlign = TextAnchor.MiddleLeft;
+            label.style.color = new Color(1f, 1f, 1f, visible ? 0.74f : 0.34f);
+            entry.Add(label);
+
+            return entry;
+        }
+
+        private Button CreateFitChip()
+        {
+            var button = new Button(FrameAll) { text = "Fit" };
+            button.tooltip = "Frame visible curves";
+            button.style.position = Position.Absolute;
+            button.style.right = 12;
+            button.style.top = 6;
+            button.style.width = 38;
+            button.style.height = 20;
+            button.style.paddingLeft = 0;
+            button.style.paddingRight = 0;
+            button.style.fontSize = 10;
+            button.style.color = new Color(1f, 1f, 1f, 0.78f);
+            button.style.backgroundColor = new Color(0f, 0f, 0f, 0.68f);
+            button.style.borderTopLeftRadius = 4;
+            button.style.borderTopRightRadius = 4;
+            button.style.borderBottomLeftRadius = 4;
+            button.style.borderBottomRightRadius = 4;
+            button.RegisterCallback<PointerDownEvent>(evt => evt.StopPropagation());
+            button.RegisterCallback<PointerMoveEvent>(evt => evt.StopPropagation());
+            button.RegisterCallback<PointerUpEvent>(evt => evt.StopPropagation());
+            return button;
         }
 
         private VisualElement CreateSingleKeyOverlay(FloatField timeField, FloatField valueField)
@@ -728,8 +896,25 @@ namespace Less3.CurveClips.Editor
 
         private void UpdateGraphOverlays()
         {
+            UpdateGraphRect();
+            if (!HasUsableGraphRect())
+            {
+                HideValueGuideLabels();
+                singleKeyOverlay.style.display = DisplayStyle.None;
+                BringGraphChipsToFront();
+                return;
+            }
+
             UpdateValueGuideLabels();
             UpdateSingleKeyOverlay();
+            BringGraphChipsToFront();
+        }
+
+        private void BringGraphChipsToFront()
+        {
+            titleChip.BringToFront();
+            curveVisibilityChip.BringToFront();
+            fitChip.BringToFront();
         }
 
         private void UpdateSingleKeyOverlay()
@@ -740,8 +925,7 @@ namespace Less3.CurveClips.Editor
                 return;
             }
 
-            Vector2 point = GraphToScreen(key.time, key.value);
-            if (!graphRect.Contains(point))
+            if (!TryGetKeyScreenPoint(key, out Vector2 point))
             {
                 singleKeyOverlay.style.display = DisplayStyle.None;
                 return;
@@ -939,8 +1123,7 @@ namespace Less3.CurveClips.Editor
             Keyframe[] keys = curve.keys;
             for (int i = 0; i < keys.Length; i++)
             {
-                Vector2 point = GraphToScreen(keys[i].time, keys[i].value);
-                if (!graphRect.Contains(point))
+                if (!TryGetKeyScreenPoint(keys[i], out Vector2 point))
                     continue;
 
                 bool selected = selection.Contains(KeyId(channel.CurvePath, i));
@@ -954,7 +1137,9 @@ namespace Less3.CurveClips.Editor
         private void DrawTangentHandles(Painter2D painter, Keyframe[] keys, int index, Color color)
         {
             Keyframe key = keys[index];
-            Vector2 keyPoint = GraphToScreen(key.time, key.value);
+            if (!TryGetKeyScreenPoint(key, out Vector2 keyPoint))
+                return;
+
             Color handleColor = new Color(color.r, color.g, color.b, 0.65f);
 
             if (CanShowTangentHandle(keys, index, false))
@@ -1013,6 +1198,7 @@ namespace Less3.CurveClips.Editor
 
             if (evt.button == 2 || (evt.button == 0 && evt.altKey))
             {
+                StopZoomAnimation();
                 interactionMode = InteractionMode.Pan;
                 pointerStart = evt.localPosition;
                 panStartMin = new Vector2(view.xMin, view.yMin);
@@ -1154,16 +1340,16 @@ namespace Less3.CurveClips.Editor
             if (!graphRect.Contains(evt.localMousePosition))
                 return;
 
-            Vector2 graphPoint = ScreenToGraph(evt.localMousePosition);
-            float zoom = Mathf.Pow(1.08f, evt.delta.y);
-            float xMin = graphPoint.x + (view.xMin - graphPoint.x) * zoom;
-            float xMax = graphPoint.x + (view.xMax - graphPoint.x) * zoom;
-            float yMin = graphPoint.y + (view.yMin - graphPoint.y) * zoom;
-            float yMax = graphPoint.y + (view.yMax - graphPoint.y) * zoom;
+            Rect baseView = zoomAnimationActive ? zoomTargetView : view;
+            Vector2 graphPoint = ScreenToGraph(evt.localMousePosition, baseView);
+            float zoom = Mathf.Pow(WheelZoomStep, evt.delta.y);
+            Rect targetView = MakeViewRect(
+                graphPoint.x + (baseView.xMin - graphPoint.x) * zoom,
+                graphPoint.x + (baseView.xMax - graphPoint.x) * zoom,
+                graphPoint.y + (baseView.yMin - graphPoint.y) * zoom,
+                graphPoint.y + (baseView.yMax - graphPoint.y) * zoom);
 
-            SetView(xMin, xMax, yMin, yMax);
-            UpdateGraphOverlays();
-            MarkDirtyRepaint();
+            StartZoomAnimation(targetView);
             evt.StopPropagation();
         }
 
@@ -1189,6 +1375,7 @@ namespace Less3.CurveClips.Editor
             evt.menu.AppendAction("Frame All", _ => FrameAll());
             evt.menu.AppendAction("Reset View", _ =>
             {
+                StopZoomAnimation();
                 view = defaultView;
                 view.width = Mathf.Max(GetDuration(), defaultView.width);
                 UpdateGraphOverlays();
@@ -1448,7 +1635,9 @@ namespace Less3.CurveClips.Editor
                     if (selectedOnly && !selection.Contains(id))
                         continue;
 
-                    Vector2 point = GraphToScreen(keys[i].time, keys[i].value);
+                    if (!TryGetKeyScreenPoint(keys[i], out Vector2 point))
+                        continue;
+
                     float distance = Vector2.Distance(point, mouse);
                     if (distance <= radius && distance < bestDistance)
                     {
@@ -1733,6 +1922,7 @@ namespace Less3.CurveClips.Editor
 
         private void FrameAll()
         {
+            StopZoomAnimation();
             IReadOnlyList<CurveChannel> channels = getChannels();
             float duration = GetDuration();
             float minTime = 0f;
@@ -1894,18 +2084,39 @@ namespace Less3.CurveClips.Editor
             return (WeightedMode)((int)current | (int)side);
         }
 
+        private static Color WithAlpha(Color color, float alpha)
+        {
+            color.a = alpha;
+            return color;
+        }
+
         private Vector2 GraphToScreen(float time, float value)
         {
             return new Vector2(TimeToX(time), ValueToY(value));
         }
 
+        private bool TryGetKeyScreenPoint(Keyframe key, out Vector2 point)
+        {
+            point = GraphToScreen(key.time, key.value);
+            if (point.x < graphRect.xMin || point.x > graphRect.xMax)
+                return false;
+
+            point.y = Mathf.Clamp(point.y, graphRect.yMin, graphRect.yMax);
+            return true;
+        }
+
         private Vector2 ScreenToGraph(Vector2 screen)
+        {
+            return ScreenToGraph(screen, view);
+        }
+
+        private Vector2 ScreenToGraph(Vector2 screen, Rect sourceView)
         {
             float normalizedTime = Mathf.InverseLerp(graphRect.xMin, graphRect.xMax, screen.x);
             float normalizedValue = Mathf.InverseLerp(graphRect.yMax, graphRect.yMin, screen.y);
             return new Vector2(
-                Mathf.Lerp(view.xMin, view.xMax, normalizedTime),
-                Mathf.Lerp(view.yMin, view.yMax, normalizedValue));
+                Mathf.Lerp(sourceView.xMin, sourceView.xMax, normalizedTime),
+                Mathf.Lerp(sourceView.yMin, sourceView.yMax, normalizedValue));
         }
 
         private float TimeToX(float time)
@@ -1920,12 +2131,73 @@ namespace Less3.CurveClips.Editor
 
         private void SetView(float xMin, float xMax, float yMin, float yMax)
         {
+            view = MakeViewRect(xMin, xMax, yMin, yMax);
+        }
+
+        private static Rect MakeViewRect(float xMin, float xMax, float yMin, float yMax)
+        {
             if (xMax - xMin < 0.01f)
                 xMax = xMin + 0.01f;
             if (yMax - yMin < 0.01f)
                 yMax = yMin + 0.01f;
 
-            view = Rect.MinMaxRect(xMin, yMin, xMax, yMax);
+            return Rect.MinMaxRect(xMin, yMin, xMax, yMax);
+        }
+
+        private void StartZoomAnimation(Rect targetView)
+        {
+            zoomStartView = view;
+            zoomTargetView = targetView;
+            zoomAnimationStartTime = EditorApplication.timeSinceStartup;
+            zoomAnimationActive = true;
+
+            if (zoomAnimationScheduled)
+                return;
+
+            zoomAnimationScheduled = true;
+            schedule.Execute(UpdateZoomAnimation).Every(16).Until(() => !zoomAnimationActive);
+        }
+
+        private void UpdateZoomAnimation()
+        {
+            if (!zoomAnimationActive)
+            {
+                zoomAnimationScheduled = false;
+                return;
+            }
+
+            double elapsed = EditorApplication.timeSinceStartup - zoomAnimationStartTime;
+            float t = Mathf.Clamp01((float)(elapsed / WheelZoomDuration));
+            float eased = 1f - Mathf.Pow(1f - t, 3f);
+            view = LerpView(zoomStartView, zoomTargetView, eased);
+
+            if (t >= 1f)
+            {
+                view = zoomTargetView;
+                zoomAnimationActive = false;
+                zoomAnimationScheduled = false;
+            }
+
+            UpdateGraphOverlays();
+            MarkDirtyRepaint();
+        }
+
+        private void StopZoomAnimation()
+        {
+            if (!zoomAnimationActive)
+                return;
+
+            zoomAnimationActive = false;
+            zoomAnimationScheduled = false;
+        }
+
+        private static Rect LerpView(Rect from, Rect to, float t)
+        {
+            return Rect.MinMaxRect(
+                Mathf.Lerp(from.xMin, to.xMin, t),
+                Mathf.Lerp(from.yMin, to.yMin, t),
+                Mathf.Lerp(from.xMax, to.xMax, t),
+                Mathf.Lerp(from.yMax, to.yMax, t));
         }
 
         private float GetDuration()
