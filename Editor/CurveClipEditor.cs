@@ -915,8 +915,9 @@ namespace Less3.CurveClips.Editor
             Vector2 startGraph = ScreenToGraph(pointerStart);
             Vector2 currentGraph = ScreenToGraph(mouse);
             Vector2 delta = currentGraph - startGraph;
+            float duration = GetDuration();
             ApplyKeyTransform(state => new Vector2(
-                Mathf.Clamp(state.OriginalKey.time + delta.x, 0f, GetDuration()),
+                Mathf.Clamp(state.OriginalKey.time + delta.x, 0f, duration),
                 state.OriginalKey.value + delta.y));
         }
 
@@ -1011,9 +1012,10 @@ namespace Less3.CurveClips.Editor
             float startY = selectionStartGraph.y - scaleAnchor.y;
             float scaleX = Mathf.Abs(startX) > 0.0001f ? (current.x - scaleAnchor.x) / startX : 1f;
             float scaleY = Mathf.Abs(startY) > 0.0001f ? (current.y - scaleAnchor.y) / startY : 1f;
+            float duration = GetDuration();
 
             ApplyKeyTransform(state => new Vector2(
-                Mathf.Clamp(scaleAnchor.x + (state.OriginalKey.time - scaleAnchor.x) * scaleX, 0f, GetDuration()),
+                Mathf.Clamp(scaleAnchor.x + (state.OriginalKey.time - scaleAnchor.x) * scaleX, 0f, duration),
                 scaleAnchor.y + (state.OriginalKey.value - scaleAnchor.y) * scaleY));
         }
 
