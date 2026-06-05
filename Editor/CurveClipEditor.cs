@@ -500,6 +500,7 @@ namespace Less3.CurveClips.Editor
                 () => GetChannels(group, false),
                 IsVisible,
                 SetCurveVisible,
+                RepaintGraphs,
                 defaultView);
             graph.style.height = 200;
             graph.style.marginBottom = 0;
@@ -517,6 +518,7 @@ namespace Less3.CurveClips.Editor
                 () => GetCombinedChannels(false),
                 IsVisible,
                 SetCurveVisible,
+                RepaintGraphs,
                 new Rect(-.1f, -90f, 1.2f, 180f));
             graph.style.height = 420;
             graph.style.marginBottom = 0;
@@ -835,6 +837,7 @@ namespace Less3.CurveClips.Editor
         private readonly Func<IReadOnlyList<CurveChannel>> getAllChannels;
         private readonly Func<CurveChannel, bool> isChannelVisible;
         private readonly Action<CurveChannel, bool> setChannelVisible;
+        private readonly Action repaintAllGraphs;
         private readonly Rect defaultView;
         private readonly HashSet<string> selection = new HashSet<string>();
         private readonly List<KeyDragState> keyDragStates = new List<KeyDragState>();
@@ -868,6 +871,8 @@ namespace Less3.CurveClips.Editor
         private bool needsInitialFrame = true;
         private bool zoomAnimationActive;
         private bool zoomAnimationScheduled;
+        private static AnimationCurve copiedCurve;
+        private static string copiedCurveLabel;
 
         public CurveClipGraphElement(
             string title,
@@ -877,6 +882,7 @@ namespace Less3.CurveClips.Editor
             Func<IReadOnlyList<CurveChannel>> getAllChannels,
             Func<CurveChannel, bool> isChannelVisible,
             Action<CurveChannel, bool> setChannelVisible,
+            Action repaintAllGraphs,
             Rect defaultView)
         {
             this.serializedObject = serializedObject;
@@ -885,6 +891,7 @@ namespace Less3.CurveClips.Editor
             this.getAllChannels = getAllChannels;
             this.isChannelVisible = isChannelVisible;
             this.setChannelVisible = setChannelVisible;
+            this.repaintAllGraphs = repaintAllGraphs;
             this.defaultView = defaultView;
             view = defaultView;
 
@@ -1104,6 +1111,8 @@ namespace Less3.CurveClips.Editor
             entry.style.alignItems = Align.Center;
             entry.style.height = 14;
             entry.style.marginBottom = 1;
+            entry.tooltip = "Right-click to copy or paste this curve";
+            entry.AddManipulator(new ContextualMenuManipulator(evt => BuildCurveChipContextMenu(evt, channel)));
 
             var swatch = new VisualElement();
             swatch.tooltip = visible ? "Hide " + channel.Label : "Show " + channel.Label;
@@ -1143,6 +1152,74 @@ namespace Less3.CurveClips.Editor
             entry.Add(label);
 
             return entry;
+        }
+
+        private void BuildCurveChipContextMenu(ContextualMenuPopulateEvent evt, CurveChannel channel)
+        {
+            evt.StopPropagation();
+            evt.menu.AppendAction(
+                "Copy Curve",
+                _ => CopyCurve(channel),
+                _ => GetCurveProperty(channel) != null ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
+
+            string pasteLabel = string.IsNullOrEmpty(copiedCurveLabel)
+                ? "Paste Curve"
+                : "Paste Curve from " + copiedCurveLabel;
+            evt.menu.AppendAction(
+                pasteLabel,
+                _ => PasteCurve(channel),
+                _ => copiedCurve != null && GetCurveProperty(channel) != null ? DropdownMenuAction.Status.Normal : DropdownMenuAction.Status.Disabled);
+        }
+
+        private SerializedProperty GetCurveProperty(CurveChannel channel)
+        {
+            serializedObject.Update();
+            SerializedProperty property = serializedObject.FindProperty(channel.CurvePath);
+            return property != null && property.propertyType == SerializedPropertyType.AnimationCurve
+                ? property
+                : null;
+        }
+
+        private void CopyCurve(CurveChannel channel)
+        {
+            SerializedProperty property = GetCurveProperty(channel);
+            if (property == null)
+                return;
+
+            copiedCurve = CloneCurve(property.animationCurveValue);
+            copiedCurveLabel = channel.Label;
+        }
+
+        private void PasteCurve(CurveChannel channel)
+        {
+            if (copiedCurve == null)
+                return;
+
+            SerializedProperty property = GetCurveProperty(channel);
+            if (property == null)
+                return;
+
+            Undo.RecordObject(serializedObject.targetObject, "Paste Curve");
+            property.animationCurveValue = CloneCurve(copiedCurve);
+            serializedObject.ApplyModifiedProperties();
+            EditorUtility.SetDirty(serializedObject.targetObject);
+            selection.Clear();
+            UpdateGraphOverlays();
+            MarkDirtyRepaint();
+            repaintAllGraphs?.Invoke();
+        }
+
+        private static AnimationCurve CloneCurve(AnimationCurve source)
+        {
+            if (source == null)
+                return new AnimationCurve();
+
+            var clone = new AnimationCurve(source.keys)
+            {
+                preWrapMode = source.preWrapMode,
+                postWrapMode = source.postWrapMode
+            };
+            return clone;
         }
 
         private Button CreateFitChip()
