@@ -11,7 +11,10 @@ namespace Less3.CurveClips.Editor
     public sealed class CurveClipEditor : UnityEditor.Editor
     {
         private const string CombinedGraphEditorPrefKey = "Less3.CurveClips.Editor.ShowCombinedGraph";
+        private const string PreviewLoopDelayEditorPrefKey = "Less3.CurveClips.Editor.PreviewLoopDelay";
         private const float GraphSectionInspectorBleed = 6f;
+        private const float PreviewLoopDelayControlWidth = 112f;
+        private const float PreviewLoopDelayControlHeight = 22f;
 
         private VisualElement curveList;
         private CurveClipGraphElement positionGraph;
@@ -32,11 +35,13 @@ namespace Less3.CurveClips.Editor
         private double previewStartTime;
         private float previewOrbitYaw = 140f;
         private float previewOrbitPitch = -22f;
+        private float previewLoopDelay;
         private bool showCombinedGraph;
 
         private void OnEnable()
         {
             previewStartTime = EditorApplication.timeSinceStartup;
+            previewLoopDelay = Mathf.Max(0f, EditorPrefs.GetFloat(PreviewLoopDelayEditorPrefKey, 0f));
             Undo.undoRedoPerformed += OnUndoRedoPerformed;
         }
 
@@ -95,25 +100,29 @@ namespace Less3.CurveClips.Editor
 
         public override void OnPreviewGUI(Rect rect, GUIStyle background)
         {
-            HandlePreviewInput(rect);
-            if (Event.current.type != EventType.Repaint)
-                return;
+            Rect loopDelayRect = GetPreviewLoopDelayControlRect(rect);
+            HandlePreviewInput(rect, loopDelayRect);
 
             CurveClip clip = target as CurveClip;
-            if (clip == null)
-                return;
+            if (Event.current.type == EventType.Repaint && clip != null)
+            {
+                EnsurePreviewResources();
+                RenderCurvePreview(rect, background, clip);
+            }
 
-            EnsurePreviewResources();
-            RenderCurvePreview(rect, background, clip);
+            DrawPreviewLoopDelayControl(loopDelayRect);
         }
 
-        private void HandlePreviewInput(Rect rect)
+        private void HandlePreviewInput(Rect rect, Rect loopDelayRect)
         {
             Event evt = Event.current;
             int controlId = GUIUtility.GetControlID(FocusType.Passive, rect);
 
             if (evt.type == EventType.MouseDown && evt.button == 0 && rect.Contains(evt.mousePosition))
             {
+                if (loopDelayRect.Contains(evt.mousePosition))
+                    return;
+
                 GUIUtility.hotControl = controlId;
                 evt.Use();
             }
@@ -128,6 +137,38 @@ namespace Less3.CurveClips.Editor
             {
                 GUIUtility.hotControl = 0;
                 evt.Use();
+            }
+        }
+
+        private Rect GetPreviewLoopDelayControlRect(Rect previewRect)
+        {
+            return new Rect(
+                previewRect.xMax - PreviewLoopDelayControlWidth - 6f,
+                previewRect.yMin + 6f,
+                PreviewLoopDelayControlWidth,
+                PreviewLoopDelayControlHeight);
+        }
+
+        private void DrawPreviewLoopDelayControl(Rect rect)
+        {
+            if (Event.current.type == EventType.Repaint)
+                EditorGUI.DrawRect(rect, new Color(0f, 0f, 0f, 0.55f));
+
+            Rect labelRect = new Rect(rect.x + 6f, rect.y + 3f, 38f, 16f);
+            Rect fieldRect = new Rect(rect.x + 47f, rect.y + 2f, rect.width - 53f, 17f);
+
+            Color previousColor = GUI.color;
+            GUI.color = new Color(1f, 1f, 1f, 0.78f);
+            GUI.Label(labelRect, "Delay", EditorStyles.miniLabel);
+            GUI.color = previousColor;
+
+            EditorGUI.BeginChangeCheck();
+            float delay = EditorGUI.FloatField(fieldRect, GUIContent.none, previewLoopDelay, EditorStyles.miniTextField);
+            if (EditorGUI.EndChangeCheck())
+            {
+                previewLoopDelay = Mathf.Max(0f, delay);
+                EditorPrefs.SetFloat(PreviewLoopDelayEditorPrefKey, previewLoopDelay);
+                Repaint();
             }
         }
 
@@ -193,7 +234,7 @@ namespace Less3.CurveClips.Editor
         private void RenderCurvePreview(Rect rect, GUIStyle background, CurveClip clip)
         {
             float duration = Mathf.Max(0.0001f, clip.duration);
-            float time = Mathf.Repeat((float)(EditorApplication.timeSinceStartup - previewStartTime), duration);
+            float time = GetPreviewPlaybackTime(duration);
             CurveClipSample sample = clip.Evaluate(time);
             Bounds bounds = CalculatePreviewBounds(clip, duration);
 
@@ -207,6 +248,14 @@ namespace Less3.CurveClips.Editor
                 0);
             previewUtility.camera.Render();
             previewUtility.EndAndDrawPreview(rect);
+        }
+
+        private float GetPreviewPlaybackTime(float duration)
+        {
+            float delay = Mathf.Max(0f, previewLoopDelay);
+            float cycleDuration = duration + delay;
+            float cycleTime = Mathf.Repeat((float)(EditorApplication.timeSinceStartup - previewStartTime), cycleDuration);
+            return Mathf.Min(cycleTime, duration);
         }
 
         private void DrawPreviewAxes(Bounds bounds)
