@@ -16,6 +16,12 @@ namespace Less3.CurveClips.Editor
         private CurveClipGraphElement rotationGraph;
         private CurveClipGraphElement scaleGraph;
         private CurveClipGraphElement customGraph;
+        private CurveClipGraphElement combinedGraph;
+        private VisualElement separateGraphsContainer;
+        private VisualElement combinedGraphContainer;
+        private ToolbarToggle separateModeToggle;
+        private ToolbarToggle combinedModeToggle;
+        private bool showCombinedGraph;
 
         public override VisualElement CreateInspectorGUI()
         {
@@ -112,12 +118,80 @@ namespace Less3.CurveClips.Editor
             rotationGraph = CreateGraph("Rotation", CurveClipCurveGroup.Rotation, new Rect(-.1f, -90f, 1.2f, 180f));
             scaleGraph = CreateGraph("Scale", CurveClipCurveGroup.Scale, new Rect(-.1f, 0f, 1.2f, 2f));
             customGraph = CreateGraph("Custom", CurveClipCurveGroup.Custom, new Rect(-.1f, 0f, 1.2f, 1f));
+            combinedGraph = CreateCombinedGraph();
 
-            root.Add(positionGraph);
-            root.Add(rotationGraph);
-            root.Add(scaleGraph);
-            root.Add(customGraph);
+            root.Add(CreateGraphModeSwitcher());
+
+            separateGraphsContainer = new VisualElement();
+            separateGraphsContainer.Add(CreateGraphRow(positionGraph, rotationGraph, true));
+            separateGraphsContainer.Add(CreateGraphRow(scaleGraph, customGraph, false));
+            root.Add(separateGraphsContainer);
+
+            combinedGraphContainer = new VisualElement();
+            combinedGraphContainer.Add(combinedGraph);
+            root.Add(combinedGraphContainer);
+
+            UpdateGraphMode();
             return root;
+        }
+
+        private VisualElement CreateGraphModeSwitcher()
+        {
+            var toolbar = new Toolbar();
+            toolbar.style.marginBottom = 6;
+
+            separateModeToggle = new ToolbarToggle { text = "Separate" };
+            separateModeToggle.RegisterValueChangedCallback(evt =>
+            {
+                if (evt.newValue)
+                    showCombinedGraph = false;
+
+                UpdateGraphMode();
+            });
+
+            combinedModeToggle = new ToolbarToggle { text = "Combined" };
+            combinedModeToggle.RegisterValueChangedCallback(evt =>
+            {
+                if (evt.newValue)
+                    showCombinedGraph = true;
+
+                UpdateGraphMode();
+            });
+
+            toolbar.Add(separateModeToggle);
+            toolbar.Add(combinedModeToggle);
+            return toolbar;
+        }
+
+        private void UpdateGraphMode()
+        {
+            if (separateGraphsContainer != null)
+                separateGraphsContainer.style.display = showCombinedGraph ? DisplayStyle.None : DisplayStyle.Flex;
+            if (combinedGraphContainer != null)
+                combinedGraphContainer.style.display = showCombinedGraph ? DisplayStyle.Flex : DisplayStyle.None;
+
+            separateModeToggle?.SetValueWithoutNotify(!showCombinedGraph);
+            combinedModeToggle?.SetValueWithoutNotify(showCombinedGraph);
+            RepaintGraphs();
+        }
+
+        private VisualElement CreateGraphRow(CurveClipGraphElement left, CurveClipGraphElement right, bool addBottomMargin)
+        {
+            var row = new VisualElement();
+            row.style.flexDirection = FlexDirection.Row;
+            row.style.marginBottom = addBottomMargin ? 12 : 0;
+
+            left.style.flexGrow = 1;
+            left.style.flexBasis = 0;
+            left.style.marginRight = 6;
+
+            right.style.flexGrow = 1;
+            right.style.flexBasis = 0;
+            right.style.marginLeft = 6;
+
+            row.Add(left);
+            row.Add(right);
+            return row;
         }
 
         private CurveClipGraphElement CreateGraph(string title, CurveClipCurveGroup group, Rect defaultView)
@@ -132,8 +206,24 @@ namespace Less3.CurveClips.Editor
                 SetCurveVisible,
                 defaultView);
             graph.style.height = 200;
-            graph.style.marginBottom = 12;
-       
+            graph.style.marginBottom = 0;
+
+            return graph;
+        }
+
+        private CurveClipGraphElement CreateCombinedGraph()
+        {
+            var graph = new CurveClipGraphElement(
+                "All Curves",
+                serializedObject,
+                serializedObject.FindProperty("duration"),
+                () => GetCombinedChannels(true),
+                () => GetCombinedChannels(false),
+                IsVisible,
+                SetCurveVisible,
+                new Rect(-.1f, -90f, 1.2f, 180f));
+            graph.style.height = 420;
+            graph.style.marginBottom = 0;
             return graph;
         }
 
@@ -286,6 +376,7 @@ namespace Less3.CurveClips.Editor
             rotationGraph?.Refresh();
             scaleGraph?.Refresh();
             customGraph?.Refresh();
+            combinedGraph?.Refresh();
         }
 
         private IReadOnlyList<CurveChannel> GetChannels(CurveClipCurveGroup group)
@@ -340,6 +431,50 @@ namespace Less3.CurveClips.Editor
 
             channels.RemoveAll(channel => !IsVisible(channel));
             return channels;
+        }
+
+        private IReadOnlyList<CurveChannel> GetCombinedChannels(bool visibleOnly)
+        {
+            var channels = new List<CurveChannel>();
+            AddCombinedChannels(channels, CurveClipCurveGroup.Position);
+            AddCombinedChannels(channels, CurveClipCurveGroup.Rotation);
+            AddCombinedChannels(channels, CurveClipCurveGroup.Scale);
+            AddCombinedChannels(channels, CurveClipCurveGroup.Custom);
+
+            if (visibleOnly)
+                channels.RemoveAll(channel => !IsVisible(channel));
+
+            return channels;
+        }
+
+        private void AddCombinedChannels(List<CurveChannel> combined, CurveClipCurveGroup group)
+        {
+            IReadOnlyList<CurveChannel> channels = GetChannels(group, false);
+            for (int i = 0; i < channels.Count; i++)
+                combined.Add(RelabelForCombinedGraph(channels[i]));
+        }
+
+        private CurveChannel RelabelForCombinedGraph(CurveChannel channel)
+        {
+            string label = channel.Label;
+            if (channel.Group == CurveClipCurveGroup.Position)
+                label = channel.Label.ToLowerInvariant() + " Pos";
+            else if (channel.Group == CurveClipCurveGroup.Rotation)
+                label = channel.Label.ToLowerInvariant() + " Rot";
+            else if (channel.Group == CurveClipCurveGroup.Scale)
+                label = channel.Label.ToLowerInvariant() + " Scale";
+            else if (channel.Group == CurveClipCurveGroup.Custom)
+                label = channel.Label.StartsWith("Custom ", StringComparison.OrdinalIgnoreCase)
+                    ? channel.Label
+                    : channel.Label + " Custom";
+
+            return new CurveChannel(
+                channel.Group,
+                label,
+                channel.CurvePath,
+                channel.NamePath,
+                channel.Color,
+                channel.CustomIndex);
         }
 
         private void AddBuiltIn(List<CurveChannel> channels, CurveClipCurveGroup group, string label, string path, Color color)
