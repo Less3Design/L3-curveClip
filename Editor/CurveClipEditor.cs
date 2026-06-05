@@ -108,10 +108,10 @@ namespace Less3.CurveClips.Editor
             var root = new VisualElement();
             root.style.marginTop = 2;
 
-            positionGraph = CreateGraph("Position", CurveClipCurveGroup.Position, new Rect(0f, -1f, 1f, 2f));
-            rotationGraph = CreateGraph("Rotation", CurveClipCurveGroup.Rotation, new Rect(0f, -90f, 1f, 180f));
-            scaleGraph = CreateGraph("Scale", CurveClipCurveGroup.Scale, new Rect(0f, 0f, 1f, 2f));
-            customGraph = CreateGraph("Custom", CurveClipCurveGroup.Custom, new Rect(0f, 0f, 1f, 1f));
+            positionGraph = CreateGraph("Position", CurveClipCurveGroup.Position, new Rect(-.1f, -1f, 1.2f, 2f));
+            rotationGraph = CreateGraph("Rotation", CurveClipCurveGroup.Rotation, new Rect(-.1f, -90f, 1.2f, 180f));
+            scaleGraph = CreateGraph("Scale", CurveClipCurveGroup.Scale, new Rect(-.1f, 0f, 1.2f, 2f));
+            customGraph = CreateGraph("Custom", CurveClipCurveGroup.Custom, new Rect(-.1f, 0f, 1.2f, 1f));
 
             root.Add(positionGraph);
             root.Add(rotationGraph);
@@ -132,15 +132,7 @@ namespace Less3.CurveClips.Editor
                 SetCurveVisible,
                 defaultView);
             graph.style.height = 200;
-            graph.style.marginBottom = 0;
-            graph.style.borderBottomWidth = 8;
-            graph.style.borderTopWidth = 8;
-            graph.style.borderLeftWidth = 8;
-            graph.style.borderRightWidth = 8;
-            graph.style.borderBottomColor = Color.black;
-            graph.style.borderTopColor = Color.black;
-            graph.style.borderLeftColor = Color.black;
-            graph.style.borderRightColor = Color.black;
+            graph.style.marginBottom = 12;
        
             return graph;
         }
