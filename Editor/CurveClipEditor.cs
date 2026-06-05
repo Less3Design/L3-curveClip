@@ -128,7 +128,7 @@ namespace Less3.CurveClips.Editor
                 serializedObject.FindProperty("duration"),
                 () => GetChannels(group),
                 defaultView);
-            graph.style.height = group == CurveClipCurveGroup.Custom ? 190 : 220;
+            graph.style.height = 300;
             graph.style.marginBottom = 6;
             return graph;
         }
@@ -357,9 +357,9 @@ namespace Less3.CurveClips.Editor
     internal sealed class CurveClipGraphElement : VisualElement
     {
         private const float HeaderHeight = 24f;
-        private const float LeftGutter = 40f;
-        private const float BottomGutter = 20f;
-        private const float TopPadding = 6f;
+        private const float LeftGutter = 0f;
+        private const float BottomGutter = 0f;
+        private const float TopPadding = 0f;
         private const float RightPadding = 8f;
         private const float KeyHitRadius = 7f;
         private const float SelectedKeyHitRadius = 12f;
@@ -939,17 +939,30 @@ namespace Less3.CurveClips.Editor
 
             Keyframe key = keys[tangentDragState.Index];
             Vector2 graph = ScreenToGraph(mouse);
-            float deltaTime = TangentHandleTimeDelta(keys, tangentDragState.Index, tangentDragState.OutHandle);
+            float segmentTime = TangentSegmentTime(keys, tangentDragState.Index, tangentDragState.OutHandle);
+            float handleDistance = tangentDragState.OutHandle
+                ? graph.x - key.time
+                : key.time - graph.x;
+            handleDistance = Mathf.Max(handleDistance, TangentHandleMinTimeDelta);
+
+            float deltaTime = tangentDragState.OutHandle ? handleDistance : -handleDistance;
             if (Mathf.Abs(deltaTime) < 0.0001f)
                 return;
 
             float tangent = (graph.y - key.value) / deltaTime;
             if (tangentDragState.OutHandle)
+            {
                 key.outTangent = tangent;
+                key.outWeight = handleDistance / segmentTime;
+                key.weightedMode = AddWeightedMode(key.weightedMode, WeightedMode.Out);
+            }
             else
+            {
                 key.inTangent = tangent;
+                key.inWeight = handleDistance / segmentTime;
+                key.weightedMode = AddWeightedMode(key.weightedMode, WeightedMode.In);
+            }
 
-            key.weightedMode = WeightedMode.None;
             curve.MoveKey(tangentDragState.Index, key);
             property.animationCurveValue = curve;
             ApplyCurveChange();
@@ -1458,10 +1471,37 @@ namespace Less3.CurveClips.Editor
 
         private float TangentHandleTimeDelta(Keyframe[] keys, int index, bool outHandle)
         {
-            if (outHandle)
-                return Mathf.Max(keys[index + 1].time - keys[index].time, TangentHandleMinTimeDelta) / 3f;
+            float segmentTime = TangentSegmentTime(keys, index, outHandle);
+            float weight = TangentHandleWeight(keys[index], outHandle);
 
-            return -Mathf.Max(keys[index].time - keys[index - 1].time, TangentHandleMinTimeDelta) / 3f;
+            if (outHandle)
+                return segmentTime * weight;
+
+            return -segmentTime * weight;
+        }
+
+        private float TangentSegmentTime(Keyframe[] keys, int index, bool outHandle)
+        {
+            if (outHandle)
+                return Mathf.Max(keys[index + 1].time - keys[index].time, TangentHandleMinTimeDelta);
+
+            return Mathf.Max(keys[index].time - keys[index - 1].time, TangentHandleMinTimeDelta);
+        }
+
+        private float TangentHandleWeight(Keyframe key, bool outHandle)
+        {
+            WeightedMode side = outHandle ? WeightedMode.Out : WeightedMode.In;
+            bool weighted = (key.weightedMode & side) == side;
+            float weight = outHandle ? key.outWeight : key.inWeight;
+            if (!weighted || weight <= 0f)
+                return 1f / 3f;
+
+            return weight;
+        }
+
+        private static WeightedMode AddWeightedMode(WeightedMode current, WeightedMode side)
+        {
+            return (WeightedMode)((int)current | (int)side);
         }
 
         private Vector2 GraphToScreen(float time, float value)
