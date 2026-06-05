@@ -1,0 +1,18 @@
+{
+    "name": "Less3.CurveClip.Editor",
+    "rootNamespace": "Less3.CurveClips.Editor",
+    "references": [
+        "Less3.CurveClip"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

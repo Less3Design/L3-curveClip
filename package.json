@@ -1,0 +1,14 @@
+{
+  "name": "less3.curve-clip",
+  "displayName": "L3 Curve Clip",
+  "version": "0.1.0",
+  "unity": "6000.0",
+  "description": "One-shot transform animation clips driven by editable AnimationCurves.",
+  "author": "Less 3",
+  "keywords": [
+    "Animation",
+    "Curve",
+    "Tween"
+  ],
+  "category": "Unity"
+}
