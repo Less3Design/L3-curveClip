@@ -363,7 +363,7 @@ namespace Less3.CurveClips.Editor
         private const float RightPadding = 8f;
         private const float KeyHitRadius = 7f;
         private const float KeyDrawRadius = 4f;
-        private const float TangentHandleLength = 42f;
+        private const float TangentHandleMinTimeDelta = 0.0001f;
         private const float SelectionHandleSize = 8f;
 
         private readonly string title;
@@ -563,13 +563,36 @@ namespace Less3.CurveClips.Editor
             painter.lineCap = LineCap.Round;
             painter.lineJoin = LineJoin.Round;
             painter.BeginPath();
+            bool isDashed = false;
 
-            int steps = Mathf.Clamp(Mathf.CeilToInt(graphRect.width / 4f), 24, 240);
+            int steps = Mathf.Clamp(Mathf.CeilToInt(graphRect.width / .5f), 24, 1000);
             for (int i = 0; i <= steps; i++)
             {
                 float t = i / (float)steps;
                 float time = Mathf.Lerp(view.xMin, view.xMax, t);
-                Vector2 point = GraphToScreen(time, curve.Evaluate(time));
+                float eval = curve.Evaluate(time);
+                Vector2 point = GraphToScreen(time, eval);
+                if (point.y >= graphRect.yMax || point.y <= graphRect.yMin)
+                {
+                    if (!isDashed && i > 0)
+                    {
+                        painter.Stroke();
+                        painter.BeginPath();
+                    }
+                    painter.dashPattern = new float[] { 2, 8 };
+                    isDashed = true;
+                }
+                else
+                {
+                    if (isDashed && i > 0)
+                    {
+                        painter.Stroke();
+                        painter.BeginPath();
+                    }
+                    painter.dashPattern = new float[] { 1 };
+                    isDashed = false;
+                }
+                
                 if (i == 0)
                     painter.MoveTo(point);
                 else
@@ -592,25 +615,26 @@ namespace Less3.CurveClips.Editor
                 FillDiamond(painter, point, selected ? KeyDrawRadius + 1.5f : KeyDrawRadius, selected ? Color.white : channel.Color);
 
                 if (selected)
-                    DrawTangentHandles(painter, channel.CurvePath, i, keys[i], channel.Color);
+                    DrawTangentHandles(painter, keys, i, channel.Color);
             }
         }
 
-        private void DrawTangentHandles(Painter2D painter, string path, int index, Keyframe key, Color color)
+        private void DrawTangentHandles(Painter2D painter, Keyframe[] keys, int index, Color color)
         {
+            Keyframe key = keys[index];
             Vector2 keyPoint = GraphToScreen(key.time, key.value);
             Color handleColor = new Color(color.r, color.g, color.b, 0.65f);
 
-            if (!float.IsInfinity(key.inTangent))
+            if (CanShowTangentHandle(keys, index, false))
             {
-                Vector2 inHandle = TangentHandlePosition(key, false);
+                Vector2 inHandle = TangentHandlePosition(keys, index, false);
                 DrawLine(painter, keyPoint, inHandle, handleColor, 1f);
                 FillRect(painter, RectFromCenter(inHandle, 5f), handleColor);
             }
 
-            if (!float.IsInfinity(key.outTangent))
+            if (CanShowTangentHandle(keys, index, true))
             {
-                Vector2 outHandle = TangentHandlePosition(key, true);
+                Vector2 outHandle = TangentHandlePosition(keys, index, true);
                 DrawLine(painter, keyPoint, outHandle, handleColor, 1f);
                 FillRect(painter, RectFromCenter(outHandle, 5f), handleColor);
             }
@@ -681,17 +705,6 @@ namespace Less3.CurveClips.Editor
                 return;
             }
 
-            SelectionScaleHandle scaleHandle = HitSelectionScaleHandle(evt.localPosition);
-            if (scaleHandle != SelectionScaleHandle.None)
-            {
-                activeScaleHandle = scaleHandle;
-                BeginScale(evt.localPosition, scaleHandle);
-                interactionMode = InteractionMode.ScaleSelection;
-                this.CapturePointer(evt.pointerId);
-                evt.StopPropagation();
-                return;
-            }
-
             KeyHit keyHit = HitKey(evt.localPosition);
             if (keyHit.IsValid)
             {
@@ -711,6 +724,17 @@ namespace Less3.CurveClips.Editor
 
                 BeginKeyDrag(evt.localPosition);
                 interactionMode = InteractionMode.DragKeys;
+                this.CapturePointer(evt.pointerId);
+                evt.StopPropagation();
+                return;
+            }
+
+            SelectionScaleHandle scaleHandle = HitSelectionScaleHandle(evt.localPosition);
+            if (scaleHandle != SelectionScaleHandle.None)
+            {
+                activeScaleHandle = scaleHandle;
+                BeginScale(evt.localPosition, scaleHandle);
+                interactionMode = InteractionMode.ScaleSelection;
                 this.CapturePointer(evt.pointerId);
                 evt.StopPropagation();
                 return;
@@ -875,9 +899,13 @@ namespace Less3.CurveClips.Editor
             if (tangentDragState.Index < 0 || tangentDragState.Index >= curve.length)
                 return;
 
-            Keyframe key = curve.keys[tangentDragState.Index];
+            Keyframe[] keys = curve.keys;
+            if (!CanShowTangentHandle(keys, tangentDragState.Index, tangentDragState.OutHandle))
+                return;
+
+            Keyframe key = keys[tangentDragState.Index];
             Vector2 graph = ScreenToGraph(mouse);
-            float deltaTime = graph.x - key.time;
+            float deltaTime = TangentHandleTimeDelta(keys, tangentDragState.Index, tangentDragState.OutHandle);
             if (Mathf.Abs(deltaTime) < 0.0001f)
                 return;
 
@@ -1043,10 +1071,10 @@ namespace Less3.CurveClips.Editor
                 if (index < 0 || index >= curve.length)
                     continue;
 
-                Keyframe key = curve.keys[index];
-                if (!float.IsInfinity(key.inTangent) && Vector2.Distance(TangentHandlePosition(key, false), mouse) <= KeyHitRadius)
+                Keyframe[] keys = curve.keys;
+                if (CanShowTangentHandle(keys, index, false) && Vector2.Distance(TangentHandlePosition(keys, index, false), mouse) <= KeyHitRadius)
                     return new TangentDragState(path, index, false);
-                if (!float.IsInfinity(key.outTangent) && Vector2.Distance(TangentHandlePosition(key, true), mouse) <= KeyHitRadius)
+                if (CanShowTangentHandle(keys, index, true) && Vector2.Distance(TangentHandlePosition(keys, index, true), mouse) <= KeyHitRadius)
                     return new TangentDragState(path, index, true);
             }
 
@@ -1359,18 +1387,31 @@ namespace Less3.CurveClips.Editor
             return Rect.MinMaxRect(minTime, minValue, maxTime, maxValue);
         }
 
-        private Vector2 TangentHandlePosition(Keyframe key, bool outHandle)
+        private bool CanShowTangentHandle(Keyframe[] keys, int index, bool outHandle)
         {
-            float tangent = outHandle ? key.outTangent : key.inTangent;
-            float direction = outHandle ? 1f : -1f;
-            float dt = Mathf.Max(0.0001f, view.width * 0.08f) * direction;
-            Vector2 keyPoint = GraphToScreen(key.time, key.value);
-            Vector2 target = GraphToScreen(key.time + dt, key.value + tangent * dt);
-            Vector2 delta = target - keyPoint;
-            if (delta.sqrMagnitude < 0.0001f)
-                delta = new Vector2(direction, 0f);
+            if (index < 0 || index >= keys.Length)
+                return false;
+            if (outHandle)
+                return index < keys.Length - 1 && !float.IsInfinity(keys[index].outTangent);
 
-            return keyPoint + delta.normalized * TangentHandleLength;
+            return index > 0 && !float.IsInfinity(keys[index].inTangent);
+        }
+
+        private Vector2 TangentHandlePosition(Keyframe[] keys, int index, bool outHandle)
+        {
+            Keyframe key = keys[index];
+            float tangent = outHandle ? key.outTangent : key.inTangent;
+            float dt = TangentHandleTimeDelta(keys, index, outHandle);
+
+            return GraphToScreen(key.time + dt, key.value + tangent * dt);
+        }
+
+        private float TangentHandleTimeDelta(Keyframe[] keys, int index, bool outHandle)
+        {
+            if (outHandle)
+                return Mathf.Max(keys[index + 1].time - keys[index].time, TangentHandleMinTimeDelta) / 3f;
+
+            return -Mathf.Max(keys[index].time - keys[index - 1].time, TangentHandleMinTimeDelta) / 3f;
         }
 
         private Vector2 GraphToScreen(float time, float value)
