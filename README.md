@@ -32,3 +32,7 @@ public class CurveClipExample : MonoBehaviour
     }
 }
 ```
+
+# Performance
+- Clips are played on a coroutine.
+- It is not super optimized right now. Should eventually pool it nicely inline with how [`https://github.com/Less3Design/L3-tween`](https://github.com/Less3Design/L3-tween) works
