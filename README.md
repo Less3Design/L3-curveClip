@@ -17,7 +17,7 @@ The object is just a handful of animations curves, so the main lift was creating
 
 I tried to have roughly the same feature set as the multi-curve-editor featured in Unity's particle systems.
 
-# Useage
+# Usage
 ```csharp
 using Less3.CurveClips;
 using UnityEngine;
