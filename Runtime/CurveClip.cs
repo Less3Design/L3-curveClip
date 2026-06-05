@@ -39,6 +39,13 @@ namespace Less3.CurveClips
         public AnimationCurve curve = AnimationCurve.Linear(0f, 0f, 1f, 1f);
     }
 
+    [Serializable]
+    public class CurveClipCurveVisibility
+    {
+        public string key;
+        public bool visible;
+    }
+
     public readonly struct CustomCurveSample
     {
         public readonly string Name;
@@ -120,6 +127,9 @@ namespace Less3.CurveClips
         public AnimationCurve scaleZ = AnimationCurve.Linear(0f, 1f, 1f, 1f);
 
         public List<CustomCurve> customCurves = new List<CustomCurve>();
+
+        [HideInInspector]
+        public List<CurveClipCurveVisibility> editorCurveVisibility = new List<CurveClipCurveVisibility>();
 
         public event Action<CurveClipSample> CustomCurvesSampled;
         public event Action<Transform> Completed;

@@ -10,7 +10,6 @@ namespace Less3.CurveClips.Editor
     [CustomEditor(typeof(CurveClip))]
     public sealed class CurveClipEditor : UnityEditor.Editor
     {
-        private readonly Dictionary<string, bool> curveVisibility = new Dictionary<string, bool>();
         private VisualElement curveList;
         private CurveClipGraphElement positionGraph;
         private CurveClipGraphElement rotationGraph;
@@ -322,26 +321,31 @@ namespace Less3.CurveClips.Editor
 
         private void SetAllVisible(bool visible)
         {
+            serializedObject.Update();
             foreach (CurveClipCurveGroup group in Enum.GetValues(typeof(CurveClipCurveGroup)))
             {
                 IReadOnlyList<CurveChannel> channels = GetChannels(group, false);
                 for (int i = 0; i < channels.Count; i++)
-                    curveVisibility[channels[i].VisibilityKey] = visible;
+                    SetCurveVisibility(channels[i].VisibilityKey, visible);
             }
 
+            ApplyVisibilityChange();
             RebuildCurveList();
             RepaintGraphs();
         }
 
         private void SetCurveVisible(CurveChannel channel, bool visible)
         {
-            curveVisibility[channel.VisibilityKey] = visible;
+            serializedObject.Update();
+            SetCurveVisibility(channel.VisibilityKey, visible);
+            ApplyVisibilityChange();
             RebuildCurveList();
             RepaintGraphs();
         }
 
         private void AddCustomCurve()
         {
+            float duration = GetDuration();
             serializedObject.Update();
             SerializedProperty customCurves = serializedObject.FindProperty("customCurves");
             int index = customCurves.arraySize;
@@ -349,8 +353,10 @@ namespace Less3.CurveClips.Editor
 
             SerializedProperty element = customCurves.GetArrayElementAtIndex(index);
             element.FindPropertyRelative("name").stringValue = "Custom " + (index + 1);
-            element.FindPropertyRelative("curve").animationCurveValue = AnimationCurve.Linear(0f, 0f, GetDuration(), 1f);
+            element.FindPropertyRelative("curve").animationCurveValue = AnimationCurve.Linear(0f, 0f, duration, 1f);
+            SetCurveVisibility(CustomCurveVisibilityKey(index), true);
             serializedObject.ApplyModifiedProperties();
+            EditorUtility.SetDirty(serializedObject.targetObject);
 
             RebuildCurveList();
             RepaintGraphs();
@@ -363,7 +369,9 @@ namespace Less3.CurveClips.Editor
             if (index >= 0 && index < customCurves.arraySize)
             {
                 customCurves.DeleteArrayElementAtIndex(index);
+                RemoveCurveVisibility(CustomCurveVisibilityKey(index));
                 serializedObject.ApplyModifiedProperties();
+                EditorUtility.SetDirty(serializedObject.targetObject);
             }
 
             RebuildCurveList();
@@ -484,13 +492,64 @@ namespace Less3.CurveClips.Editor
 
         private bool IsVisible(CurveChannel channel)
         {
-            if (!curveVisibility.TryGetValue(channel.VisibilityKey, out bool visible))
+            SerializedProperty entry = FindCurveVisibility(channel.VisibilityKey);
+            return entry != null && entry.FindPropertyRelative("visible").boolValue;
+        }
+
+        private SerializedProperty FindCurveVisibility(string key)
+        {
+            SerializedProperty visibility = serializedObject.FindProperty("editorCurveVisibility");
+            if (visibility == null)
+                return null;
+
+            for (int i = 0; i < visibility.arraySize; i++)
             {
-                visible = true;
-                curveVisibility[channel.VisibilityKey] = visible;
+                SerializedProperty entry = visibility.GetArrayElementAtIndex(i);
+                if (entry.FindPropertyRelative("key").stringValue == key)
+                    return entry;
             }
 
-            return visible;
+            return null;
+        }
+
+        private void SetCurveVisibility(string key, bool visible)
+        {
+            SerializedProperty entry = FindCurveVisibility(key);
+            if (entry == null)
+            {
+                SerializedProperty visibility = serializedObject.FindProperty("editorCurveVisibility");
+                int index = visibility.arraySize;
+                visibility.InsertArrayElementAtIndex(index);
+                entry = visibility.GetArrayElementAtIndex(index);
+                entry.FindPropertyRelative("key").stringValue = key;
+            }
+
+            entry.FindPropertyRelative("visible").boolValue = visible;
+        }
+
+        private void RemoveCurveVisibility(string key)
+        {
+            SerializedProperty visibility = serializedObject.FindProperty("editorCurveVisibility");
+            if (visibility == null)
+                return;
+
+            for (int i = visibility.arraySize - 1; i >= 0; i--)
+            {
+                SerializedProperty entry = visibility.GetArrayElementAtIndex(i);
+                if (entry.FindPropertyRelative("key").stringValue == key)
+                    visibility.DeleteArrayElementAtIndex(i);
+            }
+        }
+
+        private void ApplyVisibilityChange()
+        {
+            serializedObject.ApplyModifiedProperties();
+            EditorUtility.SetDirty(serializedObject.targetObject);
+        }
+
+        private static string CustomCurveVisibilityKey(int index)
+        {
+            return CurveClipCurveGroup.Custom + ":customCurves.Array.data[" + index + "].curve";
         }
 
         private float GetDuration()
@@ -1426,7 +1485,7 @@ namespace Less3.CurveClips.Editor
             else if (interactionMode == InteractionMode.Pan)
                 UpdatePan(evt.localPosition);
             else if (interactionMode == InteractionMode.DragKeys)
-                UpdateKeyDrag(evt.localPosition);
+                UpdateKeyDrag(evt.localPosition, evt.shiftKey);
             else if (interactionMode == InteractionMode.Tangent)
                 UpdateTangentDrag(evt.localPosition);
             else if (interactionMode == InteractionMode.Marquee)
@@ -1564,15 +1623,28 @@ namespace Less3.CurveClips.Editor
             return false;
         }
 
-        private void UpdateKeyDrag(Vector2 mouse)
+        private void UpdateKeyDrag(Vector2 mouse, bool constrainAxis)
         {
             Vector2 startGraph = ScreenToGraph(pointerStart);
             Vector2 currentGraph = ScreenToGraph(mouse);
             Vector2 delta = currentGraph - startGraph;
+            if (constrainAxis)
+                delta = ConstrainDeltaToNearestAxis(delta, mouse - pointerStart);
+
             float duration = GetDuration();
             ApplyKeyTransform(state => new Vector2(
                 Mathf.Clamp(state.OriginalKey.time + delta.x, 0f, duration),
                 state.OriginalKey.value + delta.y));
+        }
+
+        private static Vector2 ConstrainDeltaToNearestAxis(Vector2 graphDelta, Vector2 screenDelta)
+        {
+            if (Mathf.Abs(screenDelta.x) >= Mathf.Abs(screenDelta.y))
+                graphDelta.y = 0f;
+            else
+                graphDelta.x = 0f;
+
+            return graphDelta;
         }
 
         private void UpdateTangentDrag(Vector2 mouse)
