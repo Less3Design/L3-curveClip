@@ -108,7 +108,7 @@ namespace Less3.CurveClips
             if (validCount == 0)
                 return null;
 
-            int pick = Random.Range(0, validCount);
+            int pick = UnityEngine.Random.Range(0, validCount);
             for (int i = 0; i < clips.Count; i++)
             {
                 CurveClip clip = clips[i];
