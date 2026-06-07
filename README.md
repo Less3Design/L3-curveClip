@@ -18,21 +18,22 @@ The object is just a handful of animations curves, so the main lift was creating
 I tried to have roughly the same feature set as the multi-curve-editor featured in Unity's particle systems.
 
 # Usage
+You can play the curves targeting a transform.
 ```csharp
-using Less3.CurveClips;
-using UnityEngine;
-
-public class CurveClipExample : MonoBehaviour
+public CurveClip clip;
+public void Play()
 {
-    public CurveClip clip;
-
-    public void Play()
-    {
-        clip.Play(transform);
-    }
+    clip.Play(transform);
 }
 ```
-
+Or use the `CurveClipPlayer` component which gracefully handles more edge cases and canceling/spamming clips.
+```csharp
+public CurveClipPlayer player
+public void Play()
+{
+    player.Play();
+}
+```
 # Performance
 - Clips are played on a coroutine.
 - It is not super optimized right now. Should eventually pool it nicely inline with how [`https://github.com/Less3Design/L3-tween`](https://github.com/Less3Design/L3-tween) works
