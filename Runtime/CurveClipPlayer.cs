@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -21,6 +22,9 @@ namespace Less3.CurveClips
 
         public CurveClip ActiveClip => activeClip;
         public bool IsPlaying => playback != null && playback.IsPlaying;
+
+        public event Action<CurveClip> OnClipStarted;
+        public event Action<CurveClip> OnClipCompleted;
 
         private void Awake()
         {
@@ -69,7 +73,8 @@ namespace Less3.CurveClips
             if (resetTransformBeforePlay)
                 RestoreOriginalTransform(clip);
 
-            playback = clip.Play(playTarget, null, OnPlaybackComplete);
+            playback = clip.Play(playTarget, null, () => OnPlaybackComplete(clip));
+            OnClipStarted?.Invoke(clip);
             return true;
         }
 
@@ -160,11 +165,13 @@ namespace Less3.CurveClips
             restoreTarget.localScale = originalTransform.LocalScale;
         }
 
-        private void OnPlaybackComplete()
+        private void OnPlaybackComplete(CurveClip completedClip)
         {
             playback = null;
             if (resetOnComplete)
-                RestoreOriginalTransform(activeClip);
+                RestoreOriginalTransform(completedClip);
+
+            OnClipCompleted?.Invoke(completedClip);
         }
 
         private Transform GetTarget()
