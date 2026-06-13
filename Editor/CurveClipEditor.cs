@@ -2595,7 +2595,7 @@ namespace Less3.CurveClips.Editor
                 AnimationCurve curve = property.animationCurveValue;
                 List<TransformedKey> transformed = new List<TransformedKey>(curveState.OriginalKeys.Length);
                 for (int i = 0; i < curveState.OriginalKeys.Length; i++)
-                    transformed.Add(new TransformedKey(curveState.OriginalKeys[i], false));
+                    transformed.Add(new TransformedKey(curveState.OriginalKeys[i], i, false));
 
                 for (int i = 0; i < states.Count; i++)
                 {
@@ -2607,7 +2607,7 @@ namespace Less3.CurveClips.Editor
                     Keyframe key = state.OriginalKey;
                     key.time = next.x;
                     key.value = next.y;
-                    transformed[state.Index] = new TransformedKey(key, true);
+                    transformed[state.Index] = new TransformedKey(key, state.Index, true);
                 }
 
                 transformed.Sort((a, b) => a.Key.time.CompareTo(b.Key.time));
@@ -2620,11 +2620,68 @@ namespace Less3.CurveClips.Editor
                         selection.Add(KeyId(curveState.Path, i));
                 }
 
+                PreserveTangentHandles(curveState.OriginalKeys, transformed, nextKeys);
                 curve.keys = nextKeys;
                 property.animationCurveValue = curve;
             }
 
             ApplyCurveChange();
+        }
+
+        private void PreserveTangentHandles(Keyframe[] originalKeys, List<TransformedKey> transformed, Keyframe[] nextKeys)
+        {
+            for (int i = 0; i < nextKeys.Length; i++)
+            {
+                int originalIndex = transformed[i].OriginalIndex;
+                if (originalIndex < 0 || originalIndex >= originalKeys.Length)
+                    continue;
+
+                Keyframe key = nextKeys[i];
+                Vector2 originalPoint = KeyPoint(originalKeys[originalIndex]);
+                Vector2 keyDelta = KeyPoint(key) - originalPoint;
+
+                if (CanShowTangentHandle(originalKeys, originalIndex, false))
+                    PreserveTangentHandle(ref key, nextKeys, i, false, TangentHandleGraphPosition(originalKeys, originalIndex, false) + keyDelta);
+
+                if (CanShowTangentHandle(originalKeys, originalIndex, true))
+                    PreserveTangentHandle(ref key, nextKeys, i, true, TangentHandleGraphPosition(originalKeys, originalIndex, true) + keyDelta);
+
+                nextKeys[i] = key;
+            }
+        }
+
+        private void PreserveTangentHandle(ref Keyframe key, Keyframe[] keys, int index, bool outHandle, Vector2 handle)
+        {
+            if (outHandle)
+            {
+                if (index >= keys.Length - 1 || float.IsInfinity(key.outTangent))
+                    return;
+            }
+            else if (index <= 0 || float.IsInfinity(key.inTangent))
+                return;
+
+            Vector2 currentHandle = TangentHandleGraphPosition(keys, index, outHandle);
+            if ((currentHandle - handle).sqrMagnitude <= 0.0000000001f)
+                return;
+
+            float segmentTime = TangentSegmentTime(keys, index, outHandle);
+            float handleDistance = outHandle ? handle.x - key.time : key.time - handle.x;
+            handleDistance = Mathf.Max(handleDistance, TangentHandleMinTimeDelta);
+
+            float deltaTime = outHandle ? handleDistance : -handleDistance;
+            float tangent = (handle.y - key.value) / deltaTime;
+            if (outHandle)
+            {
+                key.outTangent = tangent;
+                key.outWeight = handleDistance / segmentTime;
+                key.weightedMode = AddWeightedMode(key.weightedMode, WeightedMode.Out);
+            }
+            else
+            {
+                key.inTangent = tangent;
+                key.inWeight = handleDistance / segmentTime;
+                key.weightedMode = AddWeightedMode(key.weightedMode, WeightedMode.In);
+            }
         }
 
         private KeyHit HitKey(Vector2 mouse)
@@ -3062,11 +3119,22 @@ namespace Less3.CurveClips.Editor
 
         private Vector2 TangentHandlePosition(Keyframe[] keys, int index, bool outHandle)
         {
+            Vector2 graph = TangentHandleGraphPosition(keys, index, outHandle);
+            return GraphToScreen(graph.x, graph.y);
+        }
+
+        private Vector2 TangentHandleGraphPosition(Keyframe[] keys, int index, bool outHandle)
+        {
             Keyframe key = keys[index];
             float tangent = outHandle ? key.outTangent : key.inTangent;
             float dt = TangentHandleTimeDelta(keys, index, outHandle);
 
-            return GraphToScreen(key.time + dt, key.value + tangent * dt);
+            return new Vector2(key.time + dt, key.value + tangent * dt);
+        }
+
+        private static Vector2 KeyPoint(Keyframe key)
+        {
+            return new Vector2(key.time, key.value);
         }
 
         private float TangentHandleTimeDelta(Keyframe[] keys, int index, bool outHandle)
@@ -3381,11 +3449,13 @@ namespace Less3.CurveClips.Editor
         private readonly struct TransformedKey
         {
             public readonly Keyframe Key;
+            public readonly int OriginalIndex;
             public readonly bool Selected;
 
-            public TransformedKey(Keyframe key, bool selected)
+            public TransformedKey(Keyframe key, int originalIndex, bool selected)
             {
                 Key = key;
+                OriginalIndex = originalIndex;
                 Selected = selected;
             }
         }
