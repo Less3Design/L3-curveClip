@@ -21,52 +21,39 @@ I tried to have roughly the same feature set as the multi-curve-editor featured 
 You can play the curves targeting a transform.
 ```csharp
 public CurveClip clip;
-private CurveClipPlayback playback;
+public CurveClipPlayback playback;
 
-public void Play()
+public void ThingHappened()
 {
     playback = clip.Play(transform);
 }
 
-public void PlayBoundsRelative(Renderer renderer)
+public void CancelTheThing()
 {
-    playback = clip.Play(transform, renderer);
+    playback.Cancel()
 }
-
-public void PlayBoundsRelative(GameObject root)
-{
-    playback = clip.Play(transform, root);
-}
-
-public void CancelCurrent()
-{
-    playback?.Cancel();
-}
-
-public void CancelAllOnTransform()
+```
+You can play multiple clips on a single transform and they will additively mix.
+```
+public void CancelAllClips()
 {
     CurveClip.Cancel(transform);
 }
 ```
-Position curves can also be scaled per playback:
+It's important to note that position can't be normalized across objects as simply as rotation & scale. How should a bounce on the Y axis behave across many differently size and shaped objects?
+
+For this a few methods to scale the position curves are provided.
 ```csharp
+// scale the position curves by a flat value
 clip.Play(transform, 2f);
+// scale the position curves individually
 clip.Play(transform, new Vector3(1f, 2f, 1f));
+// scale the position curves based on the bounds of a renderer
 clip.Play(transform, renderer);
+// scale the position curves based on the bounds of all renderers on a gameObject
 clip.Play(transform, gameObject);
 ```
-The renderer and GameObject overloads measure bounds in the same space used by the target's `localPosition`, so position values can be authored as object-relative movement. The GameObject overload recursively combines active enabled child renderers.
 
-Multiple clips can play on the same transform at once. They are combined in local, relative space and the transform is restored when the last clip ends or is cancelled.
-
-Or use the `CurveClipPlayer` component when you want a serialized list of clips and random selection.
-```csharp
-public CurveClipPlayer player
-public void Play()
-{
-    player.Play();
-}
-```
 # Performance
 - Clips are played on a coroutine.
 - It is not super optimized right now. Should eventually pool it nicely inline with how [`https://github.com/Less3Design/L3-tween`](https://github.com/Less3Design/L3-tween) works
