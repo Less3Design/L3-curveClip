@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace Less3.CurveClips
 {
@@ -9,6 +10,13 @@ namespace Less3.CurveClips
     {
         public Transform target;
         public List<CurveClip> clips = new List<CurveClip>();
+
+        [Space]
+        public Vector3 positionScale = Vector3.one;
+
+        [FormerlySerializedAs("positionScaleRenderer")]
+        [FormerlySerializedAs("positionScaleGameObject")]
+        public UnityEngine.Object positionScaleBoundsSource;
 
         [Space]
         public bool restartIfAlreadyPlaying = true;
@@ -57,7 +65,7 @@ namespace Less3.CurveClips
 
             activeClip = clip;
 
-            playback = clip.Play(playTarget, null, () => OnPlaybackComplete(clip));
+            playback = PlayClip(clip, playTarget);
             OnClipStarted?.Invoke(clip);
             return true;
         }
@@ -110,6 +118,17 @@ namespace Less3.CurveClips
         {
             playback = null;
             OnClipCompleted?.Invoke(completedClip);
+        }
+
+        private CurveClipPlayback PlayClip(CurveClip clip, Transform playTarget)
+        {
+            if (positionScaleBoundsSource is GameObject positionScaleGameObject)
+                return clip.Play(playTarget, positionScaleGameObject, null, () => OnPlaybackComplete(clip));
+
+            if (positionScaleBoundsSource is Renderer positionScaleRenderer)
+                return clip.Play(playTarget, positionScaleRenderer, null, () => OnPlaybackComplete(clip));
+
+            return clip.Play(playTarget, positionScale, null, () => OnPlaybackComplete(clip));
         }
 
         private Transform GetTarget()

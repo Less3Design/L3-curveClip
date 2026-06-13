@@ -33,6 +33,7 @@ namespace Less3.CurveClips
         internal CurveClipPlayback Play(
             CurveClip clip,
             Transform target,
+            Vector3 positionScale,
             Action<CurveClipSample> onCustomCurvesSampled,
             Action onComplete)
         {
@@ -43,7 +44,7 @@ namespace Less3.CurveClips
                 Clip = clip
             };
 
-            var state = new PlaybackState(playback, clip, targetState, onCustomCurvesSampled, onComplete);
+            var state = new PlaybackState(playback, clip, targetState, positionScale, onCustomCurvesSampled, onComplete);
             playback.State = state;
             playbacks.Add(state);
             targetState.Playbacks.Add(state);
@@ -172,8 +173,9 @@ namespace Less3.CurveClips
 
             for (int i = 0; i < targetState.Playbacks.Count; i++)
             {
-                CurveClipSample sample = targetState.Playbacks[i].CurrentSample;
-                positionOffset += sample.Position;
+                PlaybackState playbackState = targetState.Playbacks[i];
+                CurveClipSample sample = playbackState.CurrentSample;
+                positionOffset += Vector3.Scale(sample.Position, playbackState.PositionScale);
                 rotationOffset += sample.RotationEuler;
                 scaleMultiplier = Vector3.Scale(scaleMultiplier, sample.Scale);
             }
@@ -257,6 +259,7 @@ namespace Less3.CurveClips
             public readonly CurveClipPlayback Playback;
             public readonly CurveClip Clip;
             public readonly TargetState TargetState;
+            public readonly Vector3 PositionScale;
             public readonly Action<CurveClipSample> OnCustomCurvesSampled;
             public readonly Action OnComplete;
             public CurveClipSample CurrentSample;
@@ -267,12 +270,14 @@ namespace Less3.CurveClips
                 CurveClipPlayback playback,
                 CurveClip clip,
                 TargetState targetState,
+                Vector3 positionScale,
                 Action<CurveClipSample> onCustomCurvesSampled,
                 Action onComplete)
             {
                 Playback = playback;
                 Clip = clip;
                 TargetState = targetState;
+                PositionScale = positionScale;
                 OnCustomCurvesSampled = onCustomCurvesSampled;
                 OnComplete = onComplete;
             }

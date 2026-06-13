@@ -19,6 +19,8 @@ namespace Less3.CurveClips.Editor
         private const float MinCombinedGraphHeight = 200f;
         private const float PreviewLoopDelayControlWidth = 112f;
         private const float PreviewLoopDelayControlHeight = 22f;
+        private const float PreviewPrefabControlWidth = 190f;
+        private const float PreviewControlSpacing = 4f;
 
         private VisualElement inspectorRoot;
         private VisualElement curveList;
@@ -43,6 +45,12 @@ namespace Less3.CurveClips.Editor
         private Material previewAxisXMaterial;
         private Material previewAxisYMaterial;
         private Material previewAxisZMaterial;
+        private GameObject previewPrefab;
+        private GameObject previewPrefabInstance;
+        private GameObject previewPrefabInstanceSource;
+        private Vector3 previewPrefabBasePosition;
+        private Quaternion previewPrefabBaseRotation;
+        private Vector3 previewPrefabBaseScale;
         private double previewStartTime;
         private float previewOrbitYaw = 140f;
         private float previewOrbitPitch = -22f;
@@ -123,7 +131,8 @@ namespace Less3.CurveClips.Editor
         public override void OnPreviewGUI(Rect rect, GUIStyle background)
         {
             Rect loopDelayRect = GetPreviewLoopDelayControlRect(rect);
-            HandlePreviewInput(rect, loopDelayRect);
+            Rect prefabRect = GetPreviewPrefabControlRect(rect);
+            HandlePreviewInput(rect, loopDelayRect, prefabRect);
 
             CurveClip clip = target as CurveClip;
             if (Event.current.type == EventType.Repaint && clip != null)
@@ -133,16 +142,17 @@ namespace Less3.CurveClips.Editor
             }
 
             DrawPreviewLoopDelayControl(loopDelayRect);
+            DrawPreviewPrefabControl(prefabRect);
         }
 
-        private void HandlePreviewInput(Rect rect, Rect loopDelayRect)
+        private void HandlePreviewInput(Rect rect, Rect loopDelayRect, Rect prefabRect)
         {
             Event evt = Event.current;
             int controlId = GUIUtility.GetControlID(FocusType.Passive, rect);
 
             if (evt.type == EventType.MouseDown && evt.button == 0 && rect.Contains(evt.mousePosition))
             {
-                if (loopDelayRect.Contains(evt.mousePosition))
+                if (loopDelayRect.Contains(evt.mousePosition) || prefabRect.Contains(evt.mousePosition))
                     return;
 
                 GUIUtility.hotControl = controlId;
@@ -171,6 +181,15 @@ namespace Less3.CurveClips.Editor
                 PreviewLoopDelayControlHeight);
         }
 
+        private Rect GetPreviewPrefabControlRect(Rect previewRect)
+        {
+            return new Rect(
+                previewRect.xMax - PreviewPrefabControlWidth - 6f,
+                previewRect.yMin + 6f + PreviewLoopDelayControlHeight + PreviewControlSpacing,
+                PreviewPrefabControlWidth,
+                PreviewLoopDelayControlHeight);
+        }
+
         private void DrawPreviewLoopDelayControl(Rect rect)
         {
             if (Event.current.type == EventType.Repaint)
@@ -190,6 +209,34 @@ namespace Less3.CurveClips.Editor
             {
                 previewLoopDelay = Mathf.Max(0f, delay);
                 EditorPrefs.SetFloat(PreviewLoopDelayEditorPrefKey, previewLoopDelay);
+                Repaint();
+            }
+        }
+
+        private void DrawPreviewPrefabControl(Rect rect)
+        {
+            if (Event.current.type == EventType.Repaint)
+                EditorGUI.DrawRect(rect, new Color(0f, 0f, 0f, 0.55f));
+
+            Rect labelRect = new Rect(rect.x + 6f, rect.y + 3f, 42f, 16f);
+            Rect fieldRect = new Rect(rect.x + 52f, rect.y + 2f, rect.width - 58f, 17f);
+
+            Color previousColor = GUI.color;
+            GUI.color = new Color(1f, 1f, 1f, 0.78f);
+            GUI.Label(labelRect, "Prefab", EditorStyles.miniLabel);
+            GUI.color = previousColor;
+
+            EditorGUI.BeginChangeCheck();
+            GameObject selectedPrefab = EditorGUI.ObjectField(
+                fieldRect,
+                GUIContent.none,
+                previewPrefab,
+                typeof(GameObject),
+                false) as GameObject;
+            if (EditorGUI.EndChangeCheck())
+            {
+                previewPrefab = selectedPrefab;
+                CleanupPreviewPrefabInstance();
                 Repaint();
             }
         }
@@ -258,18 +305,102 @@ namespace Less3.CurveClips.Editor
             float duration = Mathf.Max(0.0001f, clip.duration);
             float time = GetPreviewPlaybackTime(duration);
             CurveClipSample sample = clip.Evaluate(time);
-            Bounds bounds = CalculatePreviewBounds(clip, duration);
+            bool usePrefabPreview = EnsurePreviewPrefabInstance();
+            Vector3 prefabPositionScale = usePrefabPreview ? GetPreviewPrefabPositionScale() : Vector3.one;
+            Bounds bounds = usePrefabPreview
+                ? CalculatePreviewBounds(clip, duration, previewPrefabInstance, prefabPositionScale)
+                : CalculatePreviewBounds(clip, duration);
 
             previewUtility.BeginPreview(rect, background);
             ConfigurePreviewCamera(bounds);
             DrawPreviewAxes(bounds);
-            previewUtility.DrawMesh(
-                previewCubeMesh,
-                Matrix4x4.TRS(sample.Position, Quaternion.Euler(sample.RotationEuler), sample.Scale),
-                previewCubeMaterial,
-                0);
+            if (usePrefabPreview)
+            {
+                ApplyPreviewSampleToPrefab(sample, prefabPositionScale);
+            }
+            else
+            {
+                previewUtility.DrawMesh(
+                    previewCubeMesh,
+                    Matrix4x4.TRS(sample.Position, Quaternion.Euler(sample.RotationEuler), sample.Scale),
+                    previewCubeMaterial,
+                    0);
+            }
+
             previewUtility.camera.Render();
             previewUtility.EndAndDrawPreview(rect);
+        }
+
+        private bool EnsurePreviewPrefabInstance()
+        {
+            if (previewPrefab == null)
+            {
+                CleanupPreviewPrefabInstance();
+                return false;
+            }
+
+            if (previewPrefabInstance != null && previewPrefabInstanceSource == previewPrefab)
+                return true;
+
+            CleanupPreviewPrefabInstance();
+
+            previewPrefabInstance = PrefabUtility.InstantiatePrefab(previewPrefab) as GameObject;
+            if (previewPrefabInstance == null)
+                previewPrefabInstance = Instantiate(previewPrefab);
+
+            if (previewPrefabInstance == null)
+                return false;
+
+            previewPrefabInstance.name = previewPrefab.name + " Preview";
+            previewPrefabInstance.hideFlags = HideFlags.HideAndDontSave;
+            SetPreviewHideFlags(previewPrefabInstance);
+            previewPrefabInstanceSource = previewPrefab;
+
+            Transform instanceTransform = previewPrefabInstance.transform;
+            previewPrefabBasePosition = instanceTransform.localPosition;
+            previewPrefabBaseRotation = instanceTransform.localRotation;
+            previewPrefabBaseScale = instanceTransform.localScale;
+
+            previewUtility.AddSingleGO(previewPrefabInstance);
+            return true;
+        }
+
+        private static void SetPreviewHideFlags(GameObject root)
+        {
+            Transform[] transforms = root.GetComponentsInChildren<Transform>(true);
+            for (int i = 0; i < transforms.Length; i++)
+                transforms[i].gameObject.hideFlags = HideFlags.HideAndDontSave;
+        }
+
+        private Vector3 GetPreviewPrefabPositionScale()
+        {
+            if (previewPrefabInstance == null)
+                return Vector3.one;
+
+            ResetPreviewPrefabTransform();
+            return CurveClip.GetGameObjectPositionScale(previewPrefabInstance.transform, previewPrefabInstance);
+        }
+
+        private void ResetPreviewPrefabTransform()
+        {
+            if (previewPrefabInstance == null)
+                return;
+
+            Transform instanceTransform = previewPrefabInstance.transform;
+            instanceTransform.localPosition = previewPrefabBasePosition;
+            instanceTransform.localRotation = previewPrefabBaseRotation;
+            instanceTransform.localScale = previewPrefabBaseScale;
+        }
+
+        private void ApplyPreviewSampleToPrefab(CurveClipSample sample, Vector3 positionScale)
+        {
+            if (previewPrefabInstance == null)
+                return;
+
+            Transform instanceTransform = previewPrefabInstance.transform;
+            instanceTransform.localPosition = previewPrefabBasePosition + Vector3.Scale(sample.Position, positionScale);
+            instanceTransform.localRotation = previewPrefabBaseRotation * Quaternion.Euler(sample.RotationEuler);
+            instanceTransform.localScale = Vector3.Scale(previewPrefabBaseScale, sample.Scale);
         }
 
         private float GetPreviewPlaybackTime(float duration)
@@ -337,6 +468,37 @@ namespace Less3.CurveClips.Editor
             return bounds;
         }
 
+        private Bounds CalculatePreviewBounds(CurveClip clip, float duration, GameObject prefabInstance, Vector3 positionScale)
+        {
+            CurveClipSample first = clip.Evaluate(0f);
+            ApplyPreviewSampleToPrefab(first, positionScale);
+            if (!TryCalculateRendererBounds(prefabInstance, out Bounds bounds))
+                return CalculatePreviewBounds(clip, duration);
+
+            const int steps = 48;
+            for (int i = 1; i <= steps; i++)
+            {
+                float time = duration * i / steps;
+                CurveClipSample sample = clip.Evaluate(time);
+                ApplyPreviewSampleToPrefab(sample, positionScale);
+                if (TryCalculateRendererBounds(prefabInstance, out Bounds sampleBounds))
+                    bounds.Encapsulate(sampleBounds);
+            }
+
+            float axisLength = PreviewAxisLength(bounds);
+            bounds.Encapsulate(Vector3.zero);
+            bounds.Encapsulate(Vector3.right * axisLength);
+            bounds.Encapsulate(Vector3.up * axisLength);
+            bounds.Encapsulate(Vector3.forward * axisLength);
+            return bounds;
+        }
+
+        private static bool TryCalculateRendererBounds(GameObject root, out Bounds bounds)
+        {
+            bounds = default;
+            return root != null && CurveClip.TryGetGameObjectPositionBounds(root.transform, root, out bounds);
+        }
+
         private static float PreviewAxisLength(Bounds bounds)
         {
             return Mathf.Max(1f, bounds.extents.magnitude * 0.65f);
@@ -352,6 +514,8 @@ namespace Less3.CurveClips.Editor
 
         private void CleanupPreview()
         {
+            CleanupPreviewPrefabInstance();
+
             if (previewUtility != null)
             {
                 previewUtility.Cleanup();
@@ -387,6 +551,17 @@ namespace Less3.CurveClips.Editor
                 DestroyImmediate(previewAxisZMaterial);
                 previewAxisZMaterial = null;
             }
+        }
+
+        private void CleanupPreviewPrefabInstance()
+        {
+            if (previewPrefabInstance != null)
+            {
+                DestroyImmediate(previewPrefabInstance);
+                previewPrefabInstance = null;
+            }
+
+            previewPrefabInstanceSource = null;
         }
 
         private static Mesh CreatePreviewCubeMesh()

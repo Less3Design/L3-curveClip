@@ -10,12 +10,16 @@ namespace Less3.CurveClips.Editor
     {
         private SerializedProperty targetProperty;
         private SerializedProperty clipsProperty;
+        private SerializedProperty positionScaleProperty;
+        private SerializedProperty positionScaleBoundsSourceProperty;
         private SerializedProperty restartIfAlreadyPlayingProperty;
 
         private void OnEnable()
         {
             targetProperty = serializedObject.FindProperty("target");
             clipsProperty = serializedObject.FindProperty("clips");
+            positionScaleProperty = serializedObject.FindProperty("positionScale");
+            positionScaleBoundsSourceProperty = serializedObject.FindProperty("positionScaleBoundsSource");
             restartIfAlreadyPlayingProperty = serializedObject.FindProperty("restartIfAlreadyPlaying");
         }
 
@@ -25,6 +29,7 @@ namespace Less3.CurveClips.Editor
 
             DrawTargetField();
             EditorGUILayout.PropertyField(clipsProperty);
+            DrawPositionScaleFields();
             EditorGUILayout.PropertyField(restartIfAlreadyPlayingProperty);
 
             serializedObject.ApplyModifiedProperties();
@@ -42,6 +47,12 @@ namespace Less3.CurveClips.Editor
             }
 
             EditorGUILayout.EndHorizontal();
+        }
+
+        private void DrawPositionScaleFields()
+        {
+            EditorGUILayout.PropertyField(positionScaleProperty);
+            EditorGUILayout.PropertyField(positionScaleBoundsSourceProperty);
         }
 
         private void SetTargetsToOwnTransform()

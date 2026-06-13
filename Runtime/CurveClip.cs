@@ -116,7 +116,27 @@ namespace Less3.CurveClips
 
         public CurveClipPlayback Play(Transform target)
         {
-            return Play(target, null, null);
+            return Play(target, Vector3.one, null, null);
+        }
+
+        public CurveClipPlayback Play(Transform target, float positionScale)
+        {
+            return Play(target, Vector3.one * positionScale, null, null);
+        }
+
+        public CurveClipPlayback Play(Transform target, Vector3 positionScale)
+        {
+            return Play(target, positionScale, null, null);
+        }
+
+        public CurveClipPlayback Play(Transform target, Renderer positionScaleRenderer)
+        {
+            return Play(target, GetRendererPositionScale(target, positionScaleRenderer), null, null);
+        }
+
+        public CurveClipPlayback Play(Transform target, GameObject positionScaleGameObject)
+        {
+            return Play(target, GetGameObjectPositionScale(target, positionScaleGameObject), null, null);
         }
 
         public CurveClipPlayback Play(
@@ -124,10 +144,46 @@ namespace Less3.CurveClips
             Action<CurveClipSample> onCustomCurvesSampled,
             Action onComplete = null)
         {
+            return Play(target, Vector3.one, onCustomCurvesSampled, onComplete);
+        }
+
+        public CurveClipPlayback Play(
+            Transform target,
+            float positionScale,
+            Action<CurveClipSample> onCustomCurvesSampled,
+            Action onComplete = null)
+        {
+            return Play(target, Vector3.one * positionScale, onCustomCurvesSampled, onComplete);
+        }
+
+        public CurveClipPlayback Play(
+            Transform target,
+            Renderer positionScaleRenderer,
+            Action<CurveClipSample> onCustomCurvesSampled,
+            Action onComplete = null)
+        {
+            return Play(target, GetRendererPositionScale(target, positionScaleRenderer), onCustomCurvesSampled, onComplete);
+        }
+
+        public CurveClipPlayback Play(
+            Transform target,
+            GameObject positionScaleGameObject,
+            Action<CurveClipSample> onCustomCurvesSampled,
+            Action onComplete = null)
+        {
+            return Play(target, GetGameObjectPositionScale(target, positionScaleGameObject), onCustomCurvesSampled, onComplete);
+        }
+
+        public CurveClipPlayback Play(
+            Transform target,
+            Vector3 positionScale,
+            Action<CurveClipSample> onCustomCurvesSampled,
+            Action onComplete = null)
+        {
             if (target == null)
                 throw new ArgumentNullException(nameof(target));
 
-            return CurveClipRunner.Instance.Play(this, target, onCustomCurvesSampled, onComplete);
+            return CurveClipRunner.Instance.Play(this, target, positionScale, onCustomCurvesSampled, onComplete);
         }
 
         public static void Cancel(Transform target)
@@ -136,6 +192,91 @@ namespace Less3.CurveClips
                 return;
 
             CurveClipRunner.Instance.Cancel(target);
+        }
+
+        public static Vector3 GetRendererPositionScale(Transform target, Renderer renderer)
+        {
+            if (target == null)
+                throw new ArgumentNullException(nameof(target));
+
+            if (renderer == null)
+                throw new ArgumentNullException(nameof(renderer));
+
+            TryGetRendererPositionBounds(target, renderer, out Bounds bounds);
+            return bounds.size;
+        }
+
+        public static Vector3 GetGameObjectPositionScale(Transform target, GameObject gameObject)
+        {
+            if (target == null)
+                throw new ArgumentNullException(nameof(target));
+
+            if (gameObject == null)
+                throw new ArgumentNullException(nameof(gameObject));
+
+            return TryGetGameObjectPositionBounds(target, gameObject, out Bounds bounds)
+                ? bounds.size
+                : Vector3.one;
+        }
+
+        public static bool TryGetGameObjectPositionBounds(Transform target, GameObject gameObject, out Bounds bounds)
+        {
+            bounds = default;
+            if (target == null || gameObject == null)
+                return false;
+
+            Renderer[] renderers = gameObject.GetComponentsInChildren<Renderer>(true);
+            bool hasBounds = false;
+            for (int i = 0; i < renderers.Length; i++)
+            {
+                Renderer renderer = renderers[i];
+                if (!ShouldIncludeRenderer(renderer))
+                    continue;
+
+                if (!TryGetRendererPositionBounds(target, renderer, out Bounds rendererBounds))
+                    continue;
+
+                if (!hasBounds)
+                {
+                    bounds = rendererBounds;
+                    hasBounds = true;
+                }
+                else
+                {
+                    bounds.Encapsulate(rendererBounds);
+                }
+            }
+
+            return hasBounds;
+        }
+
+        public static bool TryGetRendererPositionBounds(Transform target, Renderer renderer, out Bounds bounds)
+        {
+            bounds = default;
+            if (target == null || renderer == null)
+                return false;
+
+            Bounds rendererLocalBounds = renderer.localBounds;
+            Transform rendererTransform = renderer.transform;
+            Transform positionSpace = target.parent;
+            Vector3 localMin = rendererLocalBounds.min;
+            Vector3 localMax = rendererLocalBounds.max;
+
+            Vector3 firstPoint = ToPositionSpace(
+                new Vector3(localMin.x, localMin.y, localMin.z),
+                rendererTransform,
+                positionSpace);
+            bounds = new Bounds(firstPoint, Vector3.zero);
+
+            bounds.Encapsulate(ToPositionSpace(new Vector3(localMin.x, localMin.y, localMax.z), rendererTransform, positionSpace));
+            bounds.Encapsulate(ToPositionSpace(new Vector3(localMin.x, localMax.y, localMin.z), rendererTransform, positionSpace));
+            bounds.Encapsulate(ToPositionSpace(new Vector3(localMin.x, localMax.y, localMax.z), rendererTransform, positionSpace));
+            bounds.Encapsulate(ToPositionSpace(new Vector3(localMax.x, localMin.y, localMin.z), rendererTransform, positionSpace));
+            bounds.Encapsulate(ToPositionSpace(new Vector3(localMax.x, localMin.y, localMax.z), rendererTransform, positionSpace));
+            bounds.Encapsulate(ToPositionSpace(new Vector3(localMax.x, localMax.y, localMin.z), rendererTransform, positionSpace));
+            bounds.Encapsulate(ToPositionSpace(new Vector3(localMax.x, localMax.y, localMax.z), rendererTransform, positionSpace));
+
+            return true;
         }
 
         public CurveClipSample Evaluate(float time)
@@ -196,6 +337,17 @@ namespace Less3.CurveClips
         private static float Evaluate(AnimationCurve curve, float time)
         {
             return curve != null ? curve.Evaluate(time) : 0f;
+        }
+
+        private static Vector3 ToPositionSpace(Vector3 rendererLocalPoint, Transform rendererTransform, Transform positionSpace)
+        {
+            Vector3 worldPoint = rendererTransform.TransformPoint(rendererLocalPoint);
+            return positionSpace != null ? positionSpace.InverseTransformPoint(worldPoint) : worldPoint;
+        }
+
+        private static bool ShouldIncludeRenderer(Renderer renderer)
+        {
+            return renderer != null && renderer.enabled && renderer.gameObject.activeInHierarchy;
         }
 
         internal readonly struct TransformState
