@@ -11,16 +11,12 @@ namespace Less3.CurveClips.Editor
         private SerializedProperty targetProperty;
         private SerializedProperty clipsProperty;
         private SerializedProperty restartIfAlreadyPlayingProperty;
-        private SerializedProperty resetTransformBeforePlayProperty;
-        private SerializedProperty resetOnCompleteProperty;
 
         private void OnEnable()
         {
             targetProperty = serializedObject.FindProperty("target");
             clipsProperty = serializedObject.FindProperty("clips");
             restartIfAlreadyPlayingProperty = serializedObject.FindProperty("restartIfAlreadyPlaying");
-            resetTransformBeforePlayProperty = serializedObject.FindProperty("resetTransformBeforePlay");
-            resetOnCompleteProperty = serializedObject.FindProperty("resetOnComplete");
         }
 
         public override void OnInspectorGUI()
@@ -30,8 +26,6 @@ namespace Less3.CurveClips.Editor
             DrawTargetField();
             EditorGUILayout.PropertyField(clipsProperty);
             EditorGUILayout.PropertyField(restartIfAlreadyPlayingProperty);
-            EditorGUILayout.PropertyField(resetTransformBeforePlayProperty);
-            EditorGUILayout.PropertyField(resetOnCompleteProperty);
 
             serializedObject.ApplyModifiedProperties();
         }
@@ -61,7 +55,6 @@ namespace Less3.CurveClips.Editor
 
                 Undo.RecordObject(player, "Set Curve Clip Player Target");
                 player.target = player.transform;
-                player.RecaptureOriginalTransform();
                 EditorUtility.SetDirty(player);
             }
 

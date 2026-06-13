@@ -1,5 +1,4 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -10,18 +9,6 @@ namespace Less3.CurveClips
         DeltaTime,
         UnscaledDeltaTime,
         FixedDeltaTime
-    }
-
-    public enum CurveClipTransformSpace : byte
-    {
-        Local,
-        World
-    }
-
-    public enum CurveClipValueMode : byte
-    {
-        Absolute,
-        Relative
     }
 
     public enum CurveClipCurveGroup : byte
@@ -86,20 +73,19 @@ namespace Less3.CurveClips
 
     public sealed class CurveClipPlayback
     {
-        internal Coroutine Coroutine;
+        internal CurveClipRunner.PlaybackState State;
         internal Transform Target;
         internal CurveClip Clip;
 
-        public bool IsPlaying => Coroutine != null;
+        public bool IsPlaying => State != null && State.IsPlaying;
 
-        public void Stop()
+        public void Cancel()
         {
-            if (Coroutine == null)
-                return;
-
-            CurveClipRunner.Instance.StopCoroutine(Coroutine);
-            Coroutine = null;
+            CurveClipRunner.Instance.Cancel(this);
         }
+
+        [Obsolete("Use Cancel instead.")]
+        public void Stop() => Cancel();
     }
 
     [CreateAssetMenu(menuName = "Less3/Curve Clip", fileName = "New Curve Clip")]
@@ -109,8 +95,6 @@ namespace Less3.CurveClips
         public float duration = 1f;
 
         public CurveClipUpdateMode updateMode = CurveClipUpdateMode.DeltaTime;
-        public CurveClipTransformSpace transformSpace = CurveClipTransformSpace.Local;
-        public CurveClipValueMode valueMode = CurveClipValueMode.Relative;
 
         public AnimationCurve posX = AnimationCurve.Linear(0f, 0f, 1f, 0f);
         public AnimationCurve posY = AnimationCurve.Linear(0f, 0f, 1f, 0f);
@@ -143,18 +127,15 @@ namespace Less3.CurveClips
             if (target == null)
                 throw new ArgumentNullException(nameof(target));
 
-            var playback = new CurveClipPlayback
-            {
-                Target = target,
-                Clip = this
-            };
+            return CurveClipRunner.Instance.Play(this, target, onCustomCurvesSampled, onComplete);
+        }
 
-            playback.Coroutine = CurveClipRunner.Instance.StartCoroutine(PlayRoutine(
-                playback,
-                onCustomCurvesSampled,
-                onComplete));
+        public static void Cancel(Transform target)
+        {
+            if (target == null)
+                return;
 
-            return playback;
+            CurveClipRunner.Instance.Cancel(target);
         }
 
         public CurveClipSample Evaluate(float time)
@@ -192,108 +173,24 @@ namespace Less3.CurveClips
             if (target == null)
                 return;
 
-            ApplySample(target, Evaluate(time), CaptureBaseTransform(target));
+            ApplyRelativeLocalSample(target, Evaluate(time), TransformState.Capture(target));
         }
 
-        private IEnumerator PlayRoutine(
-            CurveClipPlayback playback,
-            Action<CurveClipSample> onCustomCurvesSampled,
-            Action onComplete)
+        internal void NotifyCustomCurvesSampled(CurveClipSample sample)
         {
-            Transform target = playback.Target;
-            CurveClipBaseTransform baseTransform = CaptureBaseTransform(target);
-            float elapsed = 0f;
-            float safeDuration = Mathf.Max(0.0001f, duration);
+            CustomCurvesSampled?.Invoke(sample);
+        }
 
-            while (target != null && elapsed < safeDuration)
-            {
-                ApplyAndNotify(target, elapsed, baseTransform, onCustomCurvesSampled);
-
-                if (updateMode == CurveClipUpdateMode.FixedDeltaTime)
-                    yield return new WaitForFixedUpdate();
-                else
-                    yield return null;
-
-                elapsed += GetDeltaTime();
-            }
-
-            if (target != null)
-                ApplyAndNotify(target, safeDuration, baseTransform, onCustomCurvesSampled);
-
-            playback.Coroutine = null;
-            onComplete?.Invoke();
+        internal void NotifyCompleted(Transform target)
+        {
             Completed?.Invoke(target);
         }
 
-        private void ApplyAndNotify(
-            Transform target,
-            float time,
-            CurveClipBaseTransform baseTransform,
-            Action<CurveClipSample> onCustomCurvesSampled)
+        internal static void ApplyRelativeLocalSample(Transform target, CurveClipSample sample, TransformState baseTransform)
         {
-            CurveClipSample sample = Evaluate(time);
-            ApplySample(target, sample, baseTransform);
-
-            if (sample.CustomCurves.Count > 0)
-            {
-                onCustomCurvesSampled?.Invoke(sample);
-                CustomCurvesSampled?.Invoke(sample);
-            }
-        }
-
-        private void ApplySample(Transform target, CurveClipSample sample, CurveClipBaseTransform baseTransform)
-        {
-            Vector3 position = valueMode == CurveClipValueMode.Relative
-                ? baseTransform.Position + sample.Position
-                : sample.Position;
-            Quaternion rotation = valueMode == CurveClipValueMode.Relative
-                ? baseTransform.Rotation * Quaternion.Euler(sample.RotationEuler)
-                : Quaternion.Euler(sample.RotationEuler);
-            Vector3 scale = valueMode == CurveClipValueMode.Relative
-                ? Vector3.Scale(baseTransform.Scale, sample.Scale)
-                : sample.Scale;
-
-            if (transformSpace == CurveClipTransformSpace.Local)
-            {
-                target.localPosition = position;
-                target.localRotation = rotation;
-            }
-            else
-            {
-                target.position = position;
-                target.rotation = rotation;
-            }
-
-            target.localScale = scale;
-        }
-
-        private CurveClipBaseTransform CaptureBaseTransform(Transform target)
-        {
-            if (transformSpace == CurveClipTransformSpace.Local)
-            {
-                return new CurveClipBaseTransform(
-                    target.localPosition,
-                    target.localRotation,
-                    target.localScale);
-            }
-
-            return new CurveClipBaseTransform(
-                target.position,
-                target.rotation,
-                target.localScale);
-        }
-
-        private float GetDeltaTime()
-        {
-            switch (updateMode)
-            {
-                case CurveClipUpdateMode.UnscaledDeltaTime:
-                    return Time.unscaledDeltaTime;
-                case CurveClipUpdateMode.FixedDeltaTime:
-                    return Time.fixedDeltaTime;
-                default:
-                    return Time.deltaTime;
-            }
+            target.localPosition = baseTransform.LocalPosition + sample.Position;
+            target.localRotation = baseTransform.LocalRotation * Quaternion.Euler(sample.RotationEuler);
+            target.localScale = Vector3.Scale(baseTransform.LocalScale, sample.Scale);
         }
 
         private static float Evaluate(AnimationCurve curve, float time)
@@ -301,40 +198,24 @@ namespace Less3.CurveClips
             return curve != null ? curve.Evaluate(time) : 0f;
         }
 
-        private readonly struct CurveClipBaseTransform
+        internal readonly struct TransformState
         {
-            public readonly Vector3 Position;
-            public readonly Quaternion Rotation;
-            public readonly Vector3 Scale;
+            public readonly Vector3 LocalPosition;
+            public readonly Quaternion LocalRotation;
+            public readonly Vector3 LocalScale;
 
-            public CurveClipBaseTransform(Vector3 position, Quaternion rotation, Vector3 scale)
+            public TransformState(Vector3 localPosition, Quaternion localRotation, Vector3 localScale)
             {
-                Position = position;
-                Rotation = rotation;
-                Scale = scale;
+                LocalPosition = localPosition;
+                LocalRotation = localRotation;
+                LocalScale = localScale;
+            }
+
+            public static TransformState Capture(Transform target)
+            {
+                return new TransformState(target.localPosition, target.localRotation, target.localScale);
             }
         }
     }
 
-    internal sealed class CurveClipRunner : MonoBehaviour
-    {
-        private static CurveClipRunner instance;
-
-        public static CurveClipRunner Instance
-        {
-            get
-            {
-                if (instance != null)
-                    return instance;
-
-                var gameObject = new GameObject("L3 Curve Clip Runner")
-                {
-                    hideFlags = HideFlags.HideAndDontSave
-                };
-                instance = gameObject.AddComponent<CurveClipRunner>();
-                DontDestroyOnLoad(gameObject);
-                return instance;
-            }
-        }
-    }
 }

@@ -422,8 +422,6 @@ namespace Less3.CurveClips.Editor
 
             foldout.Add(CreateProperty("duration"));
             foldout.Add(CreateProperty("updateMode"));
-            foldout.Add(CreateProperty("transformSpace"));
-            foldout.Add(CreateProperty("valueMode"));
 
             return foldout;
         }

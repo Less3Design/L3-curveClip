@@ -12,13 +12,9 @@ namespace Less3.CurveClips
 
         [Space]
         public bool restartIfAlreadyPlaying = true;
-        public bool resetTransformBeforePlay = true;
-        public bool resetOnComplete;
 
         private CurveClipPlayback playback;
         private CurveClip activeClip;
-        private TransformState originalTransform;
-        private bool hasOriginalTransform;
 
         public CurveClip ActiveClip => activeClip;
         public bool IsPlaying => playback != null && playback.IsPlaying;
@@ -32,15 +28,9 @@ namespace Less3.CurveClips
                 target = transform;
         }
 
-        private void OnEnable()
-        {
-            CaptureOriginalTransform();
-        }
-
         private void OnDisable()
         {
             Stop();
-            RestoreOriginalTransform(activeClip);
         }
 
         public bool Play()
@@ -57,9 +47,6 @@ namespace Less3.CurveClips
             if (playTarget == null)
                 return false;
 
-            if (!hasOriginalTransform)
-                CaptureOriginalTransform();
-
             if (IsPlaying)
             {
                 if (!restartIfAlreadyPlaying)
@@ -70,9 +57,6 @@ namespace Less3.CurveClips
 
             activeClip = clip;
 
-            if (resetTransformBeforePlay)
-                RestoreOriginalTransform(clip);
-
             playback = clip.Play(playTarget, null, () => OnPlaybackComplete(clip));
             OnClipStarted?.Invoke(clip);
             return true;
@@ -81,20 +65,18 @@ namespace Less3.CurveClips
         public void Stop()
         {
             if (playback != null && playback.IsPlaying)
-                playback.Stop();
+                playback.Cancel();
 
             playback = null;
         }
 
         public void ResetTransform()
         {
-            RestoreOriginalTransform(activeClip);
+            CurveClip.Cancel(GetTarget());
         }
 
-        public void RecaptureOriginalTransform()
-        {
-            CaptureOriginalTransform();
-        }
+        [Obsolete("Original transforms are captured automatically when the first clip starts.")]
+        public void RecaptureOriginalTransform() { }
 
         private CurveClip PickRandomClip()
         {
@@ -124,82 +106,15 @@ namespace Less3.CurveClips
             return null;
         }
 
-        private void CaptureOriginalTransform()
-        {
-            Transform captureTarget = GetTarget();
-            if (captureTarget == null)
-            {
-                hasOriginalTransform = false;
-                return;
-            }
-
-            originalTransform = new TransformState(
-                captureTarget.localPosition,
-                captureTarget.localRotation,
-                captureTarget.position,
-                captureTarget.rotation,
-                captureTarget.localScale);
-            hasOriginalTransform = true;
-        }
-
-        private void RestoreOriginalTransform(CurveClip clip)
-        {
-            if (!hasOriginalTransform)
-                return;
-
-            Transform restoreTarget = GetTarget();
-            if (restoreTarget == null)
-                return;
-
-            if (clip != null && clip.transformSpace == CurveClipTransformSpace.World)
-            {
-                restoreTarget.position = originalTransform.WorldPosition;
-                restoreTarget.rotation = originalTransform.WorldRotation;
-            }
-            else
-            {
-                restoreTarget.localPosition = originalTransform.LocalPosition;
-                restoreTarget.localRotation = originalTransform.LocalRotation;
-            }
-
-            restoreTarget.localScale = originalTransform.LocalScale;
-        }
-
         private void OnPlaybackComplete(CurveClip completedClip)
         {
             playback = null;
-            if (resetOnComplete)
-                RestoreOriginalTransform(completedClip);
-
             OnClipCompleted?.Invoke(completedClip);
         }
 
         private Transform GetTarget()
         {
             return target != null ? target : transform;
-        }
-
-        private readonly struct TransformState
-        {
-            public readonly Vector3 LocalPosition;
-            public readonly Quaternion LocalRotation;
-            public readonly Vector3 WorldPosition;
-            public readonly Quaternion WorldRotation;
-            public readonly Vector3 LocalScale;
-
-            public TransformState(
-                Vector3 localPosition,
-                Quaternion localRotation,
-                Vector3 worldPosition,
-                Quaternion worldRotation,
-                Vector3 localScale)
-            {
-                LocalPosition = localPosition;
-                LocalRotation = localRotation;
-                WorldPosition = worldPosition;
-                WorldRotation = worldRotation;
-                LocalScale = localScale;
-            }
         }
     }
 }
