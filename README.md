@@ -21,12 +21,45 @@ I tried to have roughly the same feature set as the multi-curve-editor featured 
 You can play the curves targeting a transform.
 ```csharp
 public CurveClip clip;
+private CurveClipPlayback playback;
+
 public void Play()
 {
-    clip.Play(transform);
+    playback = clip.Play(transform);
+}
+
+public void PlayBoundsRelative(Renderer renderer)
+{
+    playback = clip.Play(transform, renderer);
+}
+
+public void PlayBoundsRelative(GameObject root)
+{
+    playback = clip.Play(transform, root);
+}
+
+public void CancelCurrent()
+{
+    playback?.Cancel();
+}
+
+public void CancelAllOnTransform()
+{
+    CurveClip.Cancel(transform);
 }
 ```
-Or use the `CurveClipPlayer` component which gracefully handles more edge cases and canceling/spamming clips.
+Position curves can also be scaled per playback:
+```csharp
+clip.Play(transform, 2f);
+clip.Play(transform, new Vector3(1f, 2f, 1f));
+clip.Play(transform, renderer);
+clip.Play(transform, gameObject);
+```
+The renderer and GameObject overloads measure bounds in the same space used by the target's `localPosition`, so position values can be authored as object-relative movement. The GameObject overload recursively combines active enabled child renderers.
+
+Multiple clips can play on the same transform at once. They are combined in local, relative space and the transform is restored when the last clip ends or is cancelled.
+
+Or use the `CurveClipPlayer` component when you want a serialized list of clips and random selection.
 ```csharp
 public CurveClipPlayer player
 public void Play()
