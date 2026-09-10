@@ -304,7 +304,7 @@ namespace Less3.CurveClips.Editor
         {
             float duration = Mathf.Max(0.0001f, clip.duration);
             float time = GetPreviewPlaybackTime(duration);
-            CurveClipSample sample = clip.Evaluate(time);
+            CurveClipSample sample = clip.Evaluate(time, null);
             bool usePrefabPreview = EnsurePreviewPrefabInstance();
             Vector3 prefabPositionScale = usePrefabPreview ? GetPreviewPrefabPositionScale() : Vector3.one;
             Bounds bounds = usePrefabPreview
@@ -450,13 +450,13 @@ namespace Less3.CurveClips.Editor
 
         private static Bounds CalculatePreviewBounds(CurveClip clip, float duration)
         {
-            CurveClipSample first = clip.Evaluate(0f);
+            CurveClipSample first = clip.Evaluate(0f, null);
             Bounds bounds = new Bounds(first.Position, PreviewSampleSize(first.Scale));
             const int steps = 48;
             for (int i = 1; i <= steps; i++)
             {
                 float time = duration * i / steps;
-                CurveClipSample sample = clip.Evaluate(time);
+                CurveClipSample sample = clip.Evaluate(time, null);
                 bounds.Encapsulate(new Bounds(sample.Position, PreviewSampleSize(sample.Scale)));
             }
 
@@ -470,7 +470,7 @@ namespace Less3.CurveClips.Editor
 
         private Bounds CalculatePreviewBounds(CurveClip clip, float duration, GameObject prefabInstance, Vector3 positionScale)
         {
-            CurveClipSample first = clip.Evaluate(0f);
+            CurveClipSample first = clip.Evaluate(0f, null);
             ApplyPreviewSampleToPrefab(first, positionScale);
             if (!TryCalculateRendererBounds(prefabInstance, out Bounds bounds))
                 return CalculatePreviewBounds(clip, duration);
@@ -479,7 +479,7 @@ namespace Less3.CurveClips.Editor
             for (int i = 1; i <= steps; i++)
             {
                 float time = duration * i / steps;
-                CurveClipSample sample = clip.Evaluate(time);
+                CurveClipSample sample = clip.Evaluate(time, null);
                 ApplyPreviewSampleToPrefab(sample, positionScale);
                 if (TryCalculateRendererBounds(prefabInstance, out Bounds sampleBounds))
                     bounds.Encapsulate(sampleBounds);

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Pool;
 
 namespace Less3.CurveClips
 {
@@ -134,7 +135,7 @@ namespace Less3.CurveClips
 
         private void Sample(PlaybackState state, float time)
         {
-            state.CurrentSample = state.Clip.Evaluate(time);
+            state.CurrentSample = state.Clip.Evaluate(time, state.CustomCurveBuffer);
             if (state.CurrentSample.CustomCurves.Count == 0)
                 return;
 
@@ -282,6 +283,8 @@ namespace Less3.CurveClips
                         {
                             Debug.LogException(e, target);
                         }
+
+                        ReleaseCustomCurveBuffer(state);
                     }
 
                     completionBuffer.Clear();
@@ -290,6 +293,7 @@ namespace Less3.CurveClips
                     {
                         PlaybackState state = cancelBuffer[i];
                         Invoke(state.Playback.OnCanceled, state.TargetState.Target);
+                        ReleaseCustomCurveBuffer(state);
                     }
 
                     cancelBuffer.Clear();
@@ -299,6 +303,19 @@ namespace Less3.CurveClips
             {
                 invokingCallbacks = false;
             }
+        }
+
+        /// <summary>
+        /// Returns the playback's pooled custom curve list. Called from the callback drain, after the
+        /// last user code that could have observed the list has returned.
+        /// </summary>
+        private static void ReleaseCustomCurveBuffer(PlaybackState state)
+        {
+            if (state.CustomCurveBuffer == null)
+                return;
+
+            ListPool<CustomCurveSample>.Release(state.CustomCurveBuffer);
+            state.CustomCurveBuffer = null;
         }
 
         private static void Invoke(Action callback, UnityEngine.Object context)
@@ -325,6 +342,7 @@ namespace Less3.CurveClips
             public readonly Action<CurveClipSample> OnCustomCurvesSampled;
             public readonly Action OnComplete;
             public CurveClipSample CurrentSample;
+            public List<CustomCurveSample> CustomCurveBuffer = ListPool<CustomCurveSample>.Get();
             public float Elapsed;
             public bool IsPlaying = true;
 

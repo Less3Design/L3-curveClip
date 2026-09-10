@@ -52,6 +52,12 @@ namespace Less3.CurveClips
         public readonly Vector3 Position;
         public readonly Vector3 RotationEuler;
         public readonly Vector3 Scale;
+
+        /// <summary>
+        /// Custom curve values at this sample time. For samples delivered through a playback callback this list is
+        /// pooled and reused, so it is only valid for the duration of that callback. Copy the values out if you need
+        /// to keep them.
+        /// </summary>
         public readonly IReadOnlyList<CustomCurveSample> CustomCurves;
 
         public CurveClipSample(
@@ -304,25 +310,50 @@ namespace Less3.CurveClips
             return true;
         }
 
+        /// <summary>
+        /// Evaluates the clip at <paramref name="time"/>. Allocates a new list for the custom curve samples,
+        /// so prefer <see cref="Evaluate(float, List{CustomCurveSample})"/> on hot paths.
+        /// </summary>
         public CurveClipSample Evaluate(float time)
+        {
+            return Evaluate(time, new List<CustomCurveSample>(customCurves != null ? customCurves.Count : 0));
+        }
+
+        /// <summary>
+        /// Evaluates the clip at <paramref name="time"/> without allocating. Custom curve samples are written into
+        /// <paramref name="customCurveBuffer"/>, which is cleared first and referenced by the returned sample.
+        /// Pass null to skip custom curve sampling entirely; the returned sample then has an empty
+        /// <see cref="CurveClipSample.CustomCurves"/>.
+        /// </summary>
+        public CurveClipSample Evaluate(float time, List<CustomCurveSample> customCurveBuffer)
         {
             float safeDuration = Mathf.Max(0.0001f, duration);
             float clampedTime = Mathf.Clamp(time, 0f, safeDuration);
             float normalizedTime = Mathf.Clamp01(clampedTime / safeDuration);
 
-            var samples = new List<CustomCurveSample>(customCurves != null ? customCurves.Count : 0);
-            if (customCurves != null)
+            IReadOnlyList<CustomCurveSample> samples;
+            if (customCurveBuffer != null)
             {
-                for (int i = 0; i < customCurves.Count; i++)
+                customCurveBuffer.Clear();
+                if (customCurves != null)
                 {
-                    CustomCurve customCurve = customCurves[i];
-                    if (customCurve == null || customCurve.curve == null)
-                        continue;
+                    for (int i = 0; i < customCurves.Count; i++)
+                    {
+                        CustomCurve customCurve = customCurves[i];
+                        if (customCurve == null || customCurve.curve == null)
+                            continue;
 
-                    samples.Add(new CustomCurveSample(
-                        customCurve.name,
-                        customCurve.curve.Evaluate(normalizedTime)));
+                        customCurveBuffer.Add(new CustomCurveSample(
+                            customCurve.name,
+                            customCurve.curve.Evaluate(normalizedTime)));
+                    }
                 }
+
+                samples = customCurveBuffer;
+            }
+            else
+            {
+                samples = Array.Empty<CustomCurveSample>();
             }
 
             return new CurveClipSample(
@@ -339,7 +370,7 @@ namespace Less3.CurveClips
             if (target == null)
                 return;
 
-            ApplyRelativeLocalSample(target, Evaluate(time), TransformState.Capture(target));
+            ApplyRelativeLocalSample(target, Evaluate(time, null), TransformState.Capture(target));
         }
 
         internal void NotifyCustomCurvesSampled(CurveClipSample sample)
