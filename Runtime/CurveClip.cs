@@ -76,8 +76,33 @@ namespace Less3.CurveClips
         internal CurveClipRunner.PlaybackState State;
         internal Transform Target;
         internal CurveClip Clip;
+        internal Action OnCompleted;
+        internal Action OnCanceled;
 
         public bool IsPlaying => State != null && State.IsPlaying;
+
+        /// <summary>
+        /// Sets a callback invoked once when this playback reaches the end of its clip.
+        /// Not invoked if the playback is canceled. Replaces any callback previously set through this method.
+        /// Has no effect if the playback has already finished.
+        /// </summary>
+        public CurveClipPlayback SetOnComplete(Action onComplete)
+        {
+            OnCompleted = onComplete;
+            return this;
+        }
+
+        /// <summary>
+        /// Sets a callback invoked once if this playback is canceled before it completes, either through
+        /// <see cref="Cancel"/>, <see cref="CurveClip.Cancel(Transform)"/>, or because the target transform was destroyed.
+        /// Not invoked if the playback completes normally. Replaces any callback previously set through this method.
+        /// Has no effect if the playback has already finished.
+        /// </summary>
+        public CurveClipPlayback SetOnCanceled(Action onCanceled)
+        {
+            OnCanceled = onCanceled;
+            return this;
+        }
 
         public void Cancel()
         {

@@ -11,7 +11,9 @@ namespace Less3.CurveClips
         private readonly Dictionary<Transform, TargetState> targets = new Dictionary<Transform, TargetState>();
         private readonly List<TargetState> dirtyTargets = new List<TargetState>();
         private readonly List<PlaybackState> completionBuffer = new List<PlaybackState>();
+        private readonly List<PlaybackState> cancelBuffer = new List<PlaybackState>();
         private bool applyingDirtyTargets;
+        private bool invokingCallbacks;
 
         public static CurveClipRunner Instance
         {
@@ -63,6 +65,8 @@ namespace Less3.CurveClips
 
             RemovePlayback(state);
             ApplyTarget(state.TargetState);
+            cancelBuffer.Add(state);
+            InvokeCallbacks();
         }
 
         internal void Cancel(Transform target)
@@ -71,10 +75,15 @@ namespace Less3.CurveClips
                 return;
 
             for (int i = targetState.Playbacks.Count - 1; i >= 0; i--)
-                RemovePlayback(targetState.Playbacks[i], false);
+            {
+                PlaybackState state = targetState.Playbacks[i];
+                RemovePlayback(state, false);
+                cancelBuffer.Add(state);
+            }
 
             targetState.Playbacks.Clear();
             RestoreAndRemoveTarget(targetState);
+            InvokeCallbacks();
         }
 
         private void Update()
@@ -82,14 +91,14 @@ namespace Less3.CurveClips
             Advance(CurveClipUpdateMode.DeltaTime, Time.deltaTime);
             Advance(CurveClipUpdateMode.UnscaledDeltaTime, Time.unscaledDeltaTime);
             ApplyDirtyTargets();
-            InvokeCompletions();
+            InvokeCallbacks();
         }
 
         private void FixedUpdate()
         {
             Advance(CurveClipUpdateMode.FixedDeltaTime, Time.fixedDeltaTime);
             ApplyDirtyTargets();
-            InvokeCompletions();
+            InvokeCallbacks();
         }
 
         private void Advance(CurveClipUpdateMode updateMode, float deltaTime)
@@ -103,6 +112,7 @@ namespace Less3.CurveClips
                 if (state.TargetState.Target == null)
                 {
                     RemovePlayback(state);
+                    cancelBuffer.Add(state);
                     if (state.TargetState.Playbacks.Count == 0)
                         RemoveTargetState(state.TargetState);
                     continue;
@@ -242,16 +252,68 @@ namespace Less3.CurveClips
                 dirtyTargets.Remove(targetState);
         }
 
-        private void InvokeCompletions()
+        /// <summary>
+        /// Drains the completion and cancel buffers, invoking user callbacks only once the runner's
+        /// internal state is consistent. Callbacks may play or cancel other clips; anything they queue
+        /// is picked up by the outer loop rather than recursing.
+        /// </summary>
+        private void InvokeCallbacks()
         {
-            for (int i = 0; i < completionBuffer.Count; i++)
-            {
-                PlaybackState state = completionBuffer[i];
-                state.OnComplete?.Invoke();
-                state.Clip.NotifyCompleted(state.TargetState.Target);
-            }
+            if (invokingCallbacks)
+                return;
 
-            completionBuffer.Clear();
+            invokingCallbacks = true;
+            try
+            {
+                while (completionBuffer.Count > 0 || cancelBuffer.Count > 0)
+                {
+                    for (int i = 0; i < completionBuffer.Count; i++)
+                    {
+                        PlaybackState state = completionBuffer[i];
+                        Transform target = state.TargetState.Target;
+                        Invoke(state.OnComplete, target);
+                        Invoke(state.Playback.OnCompleted, target);
+
+                        try
+                        {
+                            state.Clip.NotifyCompleted(target);
+                        }
+                        catch (Exception e)
+                        {
+                            Debug.LogException(e, target);
+                        }
+                    }
+
+                    completionBuffer.Clear();
+
+                    for (int i = 0; i < cancelBuffer.Count; i++)
+                    {
+                        PlaybackState state = cancelBuffer[i];
+                        Invoke(state.Playback.OnCanceled, state.TargetState.Target);
+                    }
+
+                    cancelBuffer.Clear();
+                }
+            }
+            finally
+            {
+                invokingCallbacks = false;
+            }
+        }
+
+        private static void Invoke(Action callback, UnityEngine.Object context)
+        {
+            if (callback == null)
+                return;
+
+            try
+            {
+                callback();
+            }
+            catch (Exception e)
+            {
+                Debug.LogException(e, context);
+            }
         }
 
         internal sealed class PlaybackState
