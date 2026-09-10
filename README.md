@@ -54,6 +54,18 @@ clip.Play(transform, renderer);
 clip.Play(transform, gameObject);
 ```
 
+Custom curve values are delivered through a sample callback:
+```csharp
+clip.Play(transform, sample =>
+{
+    foreach (CustomCurveSample custom in sample.CustomCurves)
+        Debug.Log($"{custom.Name} = {custom.Value}");
+});
+```
+`sample.CustomCurves` is a pooled list that is only valid for the duration of the callback. Copy the values out if you need to keep them.
+
 # Performance
-- Clips are played on a coroutine.
-- It is not super optimized right now. Should eventually pool it nicely inline with how [`https://github.com/Less3Design/L3-tween`](https://github.com/Less3Design/L3-tween) works
+- Clips are advanced by a single hidden runner `MonoBehaviour`; there are no coroutines.
+- Per-frame sampling is allocation free. Each playback borrows one custom curve list from Unity's `ListPool` and returns it when the playback ends.
+- `CurveClip.Evaluate(float)` allocates a fresh list for convenience. Use `Evaluate(float, List<CustomCurveSample>)` on hot paths, or pass `null` to skip custom curves.
+- Playback objects are still allocated per `Play` call. Should eventually pool those inline with how [`https://github.com/Less3Design/L3-tween`](https://github.com/Less3Design/L3-tween) works
